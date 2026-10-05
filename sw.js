@@ -1,5 +1,11 @@
-// Remindly service worker: offline cache + notification actions.
-const CACHE = 'remindly-v2';
+// Remindly service worker: instant offline start + notification actions.
+//
+// Every release bumps VERSION. The new worker downloads the whole app into a
+// fresh cache before it takes over (all-or-nothing), so the app always starts
+// instantly from a complete, consistent copy, and never waits on the network.
+const VERSION = 'v3';
+const CACHE = `remindly-${VERSION}`;
+const FONTS = 'remindly-fonts';
 const ASSETS = [
   './',
   './index.html',
@@ -11,6 +17,8 @@ const ASSETS = [
   './js/notify.js',
   './js/art.js',
   './js/sfx.js',
+  './js/motion.js',
+  './js/focus.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
@@ -23,7 +31,8 @@ self.addEventListener('install', (e) => {
   e.waitUntil(
     caches
       .open(CACHE)
-      .then((c) => c.addAll(ASSETS))
+      // cache: 'reload' skips the HTTP cache so a release is never mixed with older files
+      .then((c) => c.addAll(ASSETS.map((u) => new Request(u, { cache: 'reload' }))))
       .then(() => self.skipWaiting()),
   );
 });
@@ -32,40 +41,46 @@ self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches
       .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE && k !== FONTS).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
 });
 
-// Network-first for app files so updates land quickly, cache fallback offline.
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  // Google Fonts: cache-first so the typeface works offline too.
+
+  // Google Fonts: cache-first in a cache that survives app updates.
   if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
     e.respondWith(
-      caches.match(req).then(
-        (hit) =>
-          hit ||
-          fetch(req).then((res) => {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(req, copy));
-            return res;
-          })
-      )
+      caches.open(FONTS).then((c) =>
+        c.match(req).then(
+          (hit) =>
+            hit ||
+            fetch(req).then((res) => {
+              if (res.ok || res.type === 'opaque') c.put(req, res.clone());
+              return res;
+            }),
+        ),
+      ),
     );
     return;
   }
   if (url.origin !== location.origin) return;
+
+  // App shell: cache-first (instant), network as a fallback for anything new.
   e.respondWith(
-    fetch(req)
-      .then((res) => {
-        const copy = res.clone();
-        caches.open(CACHE).then((c) => c.put(req, copy));
-        return res;
-      })
-      .catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match('./index.html'))),
+    caches.open(CACHE).then(async (c) => {
+      if (req.mode === 'navigate') return (await c.match('./index.html')) || fetch(req);
+      const hit = await c.match(req, { ignoreSearch: true });
+      if (hit) return hit;
+      try {
+        return await fetch(req);
+      } catch {
+        return Response.error();
+      }
+    }),
   );
 });
 

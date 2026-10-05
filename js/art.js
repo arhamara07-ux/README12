@@ -133,30 +133,71 @@ function orbit(g, w, h, t) {
   g.fillRect(0, 0, w, h);
 }
 
-const SCENES = { beams, waves, rings, orbit };
+// Full-screen focus backdrop: a slow 12-second "breath" with drifting orbits.
+function breath(g, w, h, t) {
+  g.fillStyle = '#000';
+  g.fillRect(0, 0, w, h);
+  const cx = w / 2;
+  const cy = h * 0.46;
+  const base = Math.min(w, h) * 0.32;
+  const b = 0.5 + 0.5 * Math.sin((t * 2 * Math.PI) / 12);
+  const r = base * (0.9 + 0.14 * b);
+  const glow = g.createRadialGradient(cx, cy, 0, cx, cy, r * 1.9);
+  glow.addColorStop(0, `rgba(255,255,255,${0.13 + 0.07 * b})`);
+  glow.addColorStop(0.45, `rgba(255,255,255,${0.04 + 0.03 * b})`);
+  glow.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = glow;
+  g.fillRect(0, 0, w, h);
+  g.lineWidth = Math.max(1, w / 900);
+  for (let i = 0; i < 7; i++) {
+    g.save();
+    g.translate(cx, cy);
+    g.rotate(t * 0.025 * (i % 2 ? -1 : 1) + (i * Math.PI) / 7);
+    g.scale(1, 0.3 + 0.07 * Math.sin(t * 0.15 + i));
+    g.strokeStyle = `rgba(255,255,255,${0.05 + 0.025 * i})`;
+    g.beginPath();
+    g.arc(0, 0, r * (1.25 + i * 0.11), 0, Math.PI * 2);
+    g.stroke();
+    g.restore();
+  }
+}
 
-/* One shared animation loop for every mounted canvas; each pauses when off-screen. */
+const SCENES = { beams, waves, rings, orbit, breath };
+
+/* One shared animation loop for every mounted canvas. Canvases that are
+   off-screen or in a hidden view/overlay are skipped, and the frame rate adapts
+   to the device: 60fps when drawing is cheap, 30fps when it isn't. */
 const mounted = new Set();
 let raf = 0;
 let last = 0;
+let cost = 4; // smoothed ms per frame spent drawing
 const io =
   'IntersectionObserver' in window ? new IntersectionObserver((es) => es.forEach((e) => (e.target._artVisible = e.isIntersecting)), { threshold: 0.01 }) : null;
 
+const hidden = (c) => c._artVisible === false || !c.isConnected || c.closest('.view:not(.active):not(.animating), .focus:not(.show)');
+
 function size(c) {
-  const dpr = Math.min(2, devicePixelRatio || 1);
-  const r = c.getBoundingClientRect();
-  const w = Math.max(1, Math.round(r.width * dpr));
-  const h = Math.max(1, Math.round(r.height * dpr));
+  // Layout size (ignores transforms, so press/scale animations never resize the canvas)
+  const dpr = Math.min(+c.dataset.dpr || 2, devicePixelRatio || 1);
+  const w = Math.max(1, Math.round(c.clientWidth * dpr));
+  const h = Math.max(1, Math.round(c.clientHeight * dpr));
   if (c.width !== w || c.height !== h) {
     c.width = w;
     c.height = h;
   }
 }
 
+function draw(c, t) {
+  size(c);
+  SCENES[c.dataset.art]?.(c._g, c.width, c.height, t + c._seed);
+}
+
 function frame(now) {
   raf = requestAnimationFrame(frame);
-  if (now - last < 33) return; // ~30fps is plenty for slow ambient motion
+  const budget = cost > 7 ? 33 : 15;
+  if (now - last < budget) return;
   last = now;
+  const t0 = performance.now();
   const t = now / 1000;
   for (const c of mounted) {
     if (!c.isConnected) {
@@ -164,10 +205,9 @@ function frame(now) {
       io?.unobserve(c);
       continue;
     }
-    if (c._artVisible === false || !c.offsetParent || c.closest('.view:not(.active):not(.animating)')) continue;
-    size(c);
-    SCENES[c.dataset.art]?.(c._g, c.width, c.height, t + c._seed);
+    if (!hidden(c)) draw(c, t);
   }
+  cost = cost * 0.9 + (performance.now() - t0) * 0.1;
   if (!mounted.size) {
     cancelAnimationFrame(raf);
     raf = 0;
@@ -178,14 +218,12 @@ function frame(now) {
 export function mountArt(root) {
   root.querySelectorAll('canvas[data-art]').forEach((c) => {
     if (mounted.has(c)) return;
-    c._g = c.getContext('2d');
+    c._g = c.getContext('2d', { alpha: false });
     c._seed = (+c.dataset.seed || 0) * 7.3;
     mounted.add(c);
     io?.observe(c);
-    requestAnimationFrame(() => {
-      size(c);
-      SCENES[c.dataset.art]?.(c._g, c.width, c.height, 1 + c._seed);
-    });
+    // Paint immediately so a new canvas is never blank for a frame.
+    draw(c, performance.now() / 1000);
   });
   if (!reduced() && !raf && mounted.size) raf = requestAnimationFrame(frame);
 }

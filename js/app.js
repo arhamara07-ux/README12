@@ -5,6 +5,8 @@ import { parseQuick, QUICK_HINTS } from './parse.js';
 import * as N from './notify.js';
 import { mountArt, orb, glyphFor, GLYPH_NAMES } from './art.js';
 import { sfx } from './sfx.js';
+import { morph, render } from './motion.js';
+import { initFocus, openFocus, minimizeFocus, isFocusOpen, focusSession, fmtMinutes } from './focus.js';
 
 /* =========================================================
    Helpers
@@ -31,6 +33,7 @@ const ui = {
   page: null, // { type: 'list'|'smart'|'search', ... }
   showDoneToday: false,
   showDoneInList: false,
+  pillVisible: true,
   lastMinute: -1,
   lastDay: D.dateKey(new Date()),
 };
@@ -141,10 +144,12 @@ function renderItem(r, opts = {}) {
   </div>`;
 }
 
-const items = (arr, opts) => `<div class="items">${arr.map((r) => renderItem(r, opts)).join('')}</div>`;
+const items = (arr, opts = {}, key = '') =>
+  `<div class="items"${key ? ` data-key="items:${esc(key)}"` : ''}>${arr.map((r) => renderItem(r, opts)).join('')}</div>`;
 const sectionTitle = (title, count, extra = '', cls = '') =>
   `<div class="section-title ${cls}" data-flip="s:${esc(title)}">${esc(title)}${count != null ? `<span class="count">${count}</span>` : ''}${extra ? `<span class="spacer"></span>${extra}` : ''}</div>`;
-const empty = (art, title, text) => `<div class="empty"><div class="art">${art}</div><h3>${title}</h3><p>${text}</p></div>`;
+const empty = (art, title, text, key = '') =>
+  `<div class="empty"${key ? ` data-flip="${key}"` : ''}><div class="art">${art}</div><h3>${title}</h3><p>${text}</p></div>`;
 
 function alertLabel(min, short) {
   if (!min) return short ? '' : 'At time of reminder';
@@ -165,6 +170,7 @@ function phase(n) {
   return { name: 'Night Calm', icon: 'moon' };
 }
 
+// One-tap suggestions shown in the quick-add sheet while it's empty.
 const STARTERS = [
   ['drop', 'Drink water', 'Drink water in 1 hour'],
   ['pill', 'Medicine', 'Take my medicine every day at 9am'],
@@ -176,8 +182,8 @@ const STARTERS = [
   ['moon', 'Sleep', 'Go to bed at 11pm'],
 ];
 
-function artCard(art, seed, title, label, attrs) {
-  return `<button class="art-card" ${attrs}><canvas data-art="${art}" data-seed="${seed}"></canvas>
+function artCard(key, art, seed, title, label, attrs) {
+  return `<button class="art-card" data-key="${key}" ${attrs}><canvas data-art="${art}" data-seed="${seed}"></canvas>
     <div class="art-text"><h3>${esc(title)}</h3><span class="art-label">${esc(label)}</span></div></button>`;
 }
 
@@ -203,43 +209,62 @@ const RENDER = {
     const next = open()
       .filter((r) => r.due && new Date(r.due) >= n)
       .sort((a, c) => new Date(a.due) - new Date(c.due))[0];
-    const week = open().filter((r) => r.due && new Date(r.due) <= D.endOfDay(D.addDays(n, 6))).length;
     const first = state.settings.name ? state.settings.name.split(' ')[0] : '';
+    const f = focusSession();
+    const nextLabel =
+      next &&
+      (new Date(next.due) - n < D.DAY ? `Next · ${D.fmtCountdown(next.due)} · ${D.fmtTime(new Date(next.due), h24())}` : `Next · ${D.fmtDue(next.due, h24())}`);
 
-    let html = `<div class="phase-row">
+    let html = `<div class="phase-row" data-key="phase">
         <div class="phase-icon">${icon(ph.icon)}</div>
         <div class="phase-text"><b>${ph.name}</b><small>${D.WEEKDAYS[n.getDay()]}, ${D.MONTHS[n.getMonth()]} ${n.getDate()}${first ? ` · Hi, ${esc(first)}` : ''}</small></div>
       </div>`;
-    html += `<div class="carousel">
+    html += `<div class="carousel h-scroll" data-key="carousel">
+      ${next ? artCard('c-next', 'beams', 1, next.title, nextLabel, `data-open="${next.id}"`) : artCard('c-next', 'beams', 1, 'Clear Horizon', 'Nothing scheduled', 'data-action="compose"')}
+      ${artCard('c-today', 'waves', 2, left ? `${left} left today` : 'Day in Flow', total ? `${Math.round((b.completedCount / total) * 100)}% complete today` : 'Nothing due today', 'data-smart="today"')}
       ${
-        next
-          ? artCard('beams', 1, next.title, `Next · ${D.fmtDue(next.due, h24())}`, `data-open="${next.id}"`)
-          : artCard('beams', 1, 'Clear Horizon', 'Nothing scheduled', 'data-action="compose"')
+        f && !f.done
+          ? artCard(
+              'c-focus',
+              'orbit',
+              4,
+              f.title || 'Deep Focus',
+              f.end ? `Focusing · ends ${D.fmtTime(new Date(f.end), h24())}` : 'Focus paused',
+              'data-action="focus"',
+            )
+          : artCard(
+              'c-focus',
+              'orbit',
+              4,
+              'Deep Focus',
+              `${state.settings.focusMinutes || 25} minute session${st.focusToday ? ` · ${fmtMinutes(st.focusToday)} today` : ''}`,
+              'data-action="focus"',
+            )
       }
-      ${artCard('waves', 2, left ? `${left} left today` : 'Day in Flow', total ? `${Math.round((b.completedCount / total) * 100)}% complete today` : 'Nothing due today', 'data-smart="today"')}
-      ${artCard('rings', 3, st.streak ? `${st.streak}-day streak` : 'Begin a Streak', `${st.weekTotal} done this week`, 'data-go="me"')}
-      ${artCard('orbit', 4, week ? `${week} this week` : 'Open Week', "See what's ahead", 'data-go="upcoming"')}
+      ${artCard('c-streak', 'rings', 3, st.streak ? `${st.streak}-day streak` : 'Begin a Streak', `${st.weekTotal} done this week`, 'data-go="me"')}
     </div>
-    <div class="carousel-dots"><i class="on"></i><i></i><i></i><i></i></div>`;
-    html += `<button class="focus-pill" data-action="compose"><span>What should I remind you of?</span><span class="plus">${icon('plus')}</span></button>`;
-    html += `<div class="starters">${STARTERS.map(([ic, label, text]) => `<button class="starter" data-starter="${esc(text)}">${icon(ic)}${label}</button>`).join('')}</div>`;
+    <div class="carousel-dots" data-key="dots"><i class="on"></i><i></i><i></i><i></i></div>`;
+    html += `<button class="ask-pill" data-key="ask" data-action="compose"><span>What should I remind you of?</span><span class="plus">${icon('plus')}</span></button>`;
     html += notificationNotice();
-    if (b.overdue.length) html += sectionTitle('Overdue', b.overdue.length, '', 'danger') + items(b.overdue);
-    if (b.pinned.length) html += sectionTitle('Pinned', b.pinned.length) + items(b.pinned);
-    if (b.today.length) html += sectionTitle('Today', b.today.length) + items(b.today, { timeOnly: true });
+    if (b.overdue.length)
+      html +=
+        sectionTitle('Overdue', b.overdue.length, `<button class="link" data-action="overdue-today">Move to today</button>`, 'danger') +
+        items(b.overdue, {}, 'overdue');
+    if (b.pinned.length) html += sectionTitle('Pinned', b.pinned.length) + items(b.pinned, {}, 'pinned');
+    if (b.today.length) html += sectionTitle('Today', b.today.length) + items(b.today, { timeOnly: true }, 'today');
     if (!b.overdue.length && !b.today.length) {
       html += b.completedCount
-        ? empty(orb('spark', 64), 'All done for today', `You completed ${plural(b.completedCount, 'reminder')} today. Enjoy the quiet.`)
-        : empty(orb('sun', 64), 'Nothing due today', 'Tap a suggestion above, or type something like “Water plants tomorrow at 9am”.');
+        ? empty(orb('spark', 64), 'All done for today', `You completed ${plural(b.completedCount, 'reminder')} today. Enjoy the quiet.`, 'e-today')
+        : empty(orb('sun', 64), 'Nothing due today', 'Tap the bar above and type something like "Water plants tomorrow at 9am".', 'e-today');
     }
-    if (b.anytime.length) html += sectionTitle('Anytime', b.anytime.length) + items(b.anytime);
+    if (b.anytime.length) html += sectionTitle('Anytime', b.anytime.length) + items(b.anytime, {}, 'anytime');
     if (b.doneToday.length) {
       html += sectionTitle(
         'Completed today',
         b.doneToday.length,
         `<button class="link" data-action="toggle-done-today">${ui.showDoneToday ? 'Hide' : 'Show'}</button>`,
       );
-      if (ui.showDoneToday) html += items(b.doneToday, { compact: true });
+      if (ui.showDoneToday) html += items(b.doneToday, { compact: true }, 'done-today');
     }
     return html;
   },
@@ -271,7 +296,10 @@ const RENDER = {
         return `<button class="${i === 0 ? 'today' : ''} ${has ? 'has' : ''}" data-jump="${D.dateKey(d)}"><small>${D.WEEKDAYS_SHORT[d.getDay()]}</small><b>${d.getDate()}</b><i></i></button>`;
       })
       .join('')}</div>`;
-    if (overdue.length) html += sectionTitle('Overdue', overdue.length, '', 'danger') + items(overdue.sort(sortReminders));
+    if (overdue.length)
+      html +=
+        sectionTitle('Overdue', overdue.length, `<button class="link" data-action="overdue-today">Move to today</button>`, 'danger') +
+        items(overdue.sort(sortReminders), {}, 'overdue');
 
     for (let i = 0; i <= 30; i++) {
       const d = D.addDays(n, i);
@@ -282,10 +310,10 @@ const RENDER = {
       html += `<div class="day-group" id="day-${k}" data-flip="d:${k}">
         <div class="day-head"><b>${label}</b><small>${D.MONTHS_SHORT[d.getMonth()]} ${d.getDate()}</small>
         <button class="add-to-day" data-add-day="${k}" aria-label="Add on ${label}">${icon('plus')}</button></div>
-        ${entries.length ? `<div class="items">${entries.map((e) => renderItem(e.r, { ghostDate: e.ghost ? e.d : null, timeOnly: true, compact: true })).join('')}</div>` : `<div class="meta" style="margin:0 4px 6px">Nothing planned</div>`}
+        ${entries.length ? `<div class="items" data-key="items:${k}">${entries.map((e) => renderItem(e.r, { ghostDate: e.ghost ? e.d : null, timeOnly: true, compact: true })).join('')}</div>` : `<div class="nothing">Nothing planned</div>`}
       </div>`;
     }
-    if (later.length) html += sectionTitle('Later', later.length) + items(later, { compact: true });
+    if (later.length) html += sectionTitle('Later', later.length) + items(later, { compact: true }, 'later');
     return html;
   },
 
@@ -307,7 +335,7 @@ const RENDER = {
       ['completed', 'Completed', 'check', '#2fb36d', state.reminders.filter((r) => r.done).length],
     ];
     let html = `<div class="hero"><div class="hero-eyebrow">Organize</div><h2>Lists</h2></div>`;
-    html += `<div class="orb-row">${state.lists
+    html += `<div class="orb-row h-scroll" data-key="orbs">${state.lists
       .map((l) => {
         const openN = state.reminders.filter((r) => r.listId === l.id && !r.done).length;
         return `<button class="orb-tile" data-list="${l.id}" data-flip="l:${l.id}">
@@ -315,7 +343,7 @@ const RENDER = {
           <span class="lbl">${esc(l.name)}</span></button>`;
       })
       .join('')}
-      <button class="orb-tile add" data-action="new-list"><span class="orb-wrap"><span class="orb" style="--s:74px">${icon('plus')}</span></span><span class="lbl">New list</span></button>
+      <button class="orb-tile add" data-key="orb-add" data-action="new-list"><span class="orb-wrap"><span class="orb" style="--s:74px">${icon('plus')}</span></span><span class="lbl">New list</span></button>
     </div>`;
     html += sectionTitle('Smart lists');
     html += `<div class="smart-grid">${smart
@@ -341,7 +369,7 @@ const RENDER = {
     const s = state.settings;
     const perm = N.permission();
     const max = Math.max(1, ...st.week.map((w) => w.count));
-    const initial = [...(s.name.trim() || '🙂')][0].toUpperCase();
+    const initial = s.name.trim() ? [...s.name.trim()][0].toUpperCase() : '';
     const sw = (key, on) => `<label class="switch"><input type="checkbox" data-setting="${key}" ${on ? 'checked' : ''}><span></span></label>`;
     const alertOpts = [0, 5, 10, 15, 30, 60, 120, 1440]
       .map((m) => `<option value="${m}" ${s.defaultAlert === m ? 'selected' : ''}>${m ? alertLabel(m) : 'At due time'}</option>`)
@@ -365,11 +393,11 @@ const RENDER = {
     <div class="stat-grid">
       <div class="stat flame"><small>${icon('flame')}Streak</small><b>${st.streak} <span style="font-size:15px;color:var(--muted)">day${st.streak === 1 ? '' : 's'}</span></b></div>
       <div class="stat"><small>${icon('check-circle')}This week</small><b>${st.weekTotal}</b></div>
-      <div class="stat"><small>${icon('list')}Open</small><b>${st.open}</b></div>
-      <div class="stat"><small style="${st.overdue ? 'color:var(--danger)' : ''}">${icon('clock')}Overdue</small><b>${st.overdue}</b></div>
+      <div class="stat"><small>${icon('target')}Focus · week</small><b>${st.focusWeek ? fmtMinutes(st.focusWeek) : '0 min'}</b></div>
+      <div class="stat"><small>${icon('list')}Open</small><b>${st.open}${st.overdue ? ` <span style="font-size:14px;color:var(--danger)">${st.overdue} overdue</span>` : ''}</b></div>
     </div>
 
-    <div class="section-title">Activity</div>
+    <div class="section-title" data-key="t-activity">Activity</div>
     <div class="chart">
       <div class="chart-head"><b>Completed · last 7 days</b><small>Best streak ${st.best}d</small></div>
       <div class="bars">${st.week
@@ -390,9 +418,9 @@ const RENDER = {
       <div class="row"><span class="ri" style="--c:#ffa94d">${icon('alarm')}</span><span class="rl">Default early alert</span><select data-setting="defaultAlert">${alertOpts}</select></div>
       <div class="row"><span class="ri" style="--c:#fab005">${icon('sun')}</span><span class="rl">Morning summary<small>A daily overview of what's due</small></span>${sw('digest', s.digest)}</div>
       <div class="row"><span class="ri" style="--c:#fab005">${icon('clock')}</span><span class="rl">Summary time</span><input type="time" data-setting="digestTime" value="${s.digestTime}"></div>
-      <div class="row"><span class="ri">♪</span><span class="rl">Alert chime<small>Plays when a reminder is due</small></span>${sw('sound', s.sound)}</div>
-      <div class="row"><span class="ri">◌</span><span class="rl">Interface sounds<small>Soft tones as you tap and swipe</small></span>${sw('uiSounds', s.uiSounds !== false)}</div>
-      <div class="row"><span class="ri">〰</span><span class="rl">Vibration</span>${sw('haptics', s.haptics)}</div>
+      <div class="row"><span class="ri">${icon('volume')}</span><span class="rl">Alert chime<small>Plays when a reminder is due</small></span>${sw('sound', s.sound)}</div>
+      <div class="row"><span class="ri">${icon('wave')}</span><span class="rl">Interface sounds<small>Soft tones as you tap and swipe</small></span>${sw('uiSounds', s.uiSounds !== false)}</div>
+      <div class="row"><span class="ri">${icon('vibrate')}</span><span class="rl">Vibration</span>${sw('haptics', s.haptics)}</div>
     </div>
 
     <div class="section-title">Appearance</div>
@@ -434,7 +462,7 @@ function calendarCounts(from, to) {
     D.occurrences(r.due, r.repeat, from, to, 45).forEach((d) => {
       const k = D.dateKey(d);
       const arr = map.get(k) || map.set(k, []).get(k);
-      arr.push(getList(r.listId).color);
+      arr.push(1);
     }),
   );
   return map;
@@ -453,7 +481,7 @@ function calInner() {
     const k = D.dateKey(d);
     const dots = (counts.get(k) || []).slice(0, 3);
     const cls = [d.getMonth() !== m.getMonth() ? 'out' : '', D.sameDay(d, today) ? 'today' : '', D.sameDay(d, ui.calSel) ? 'sel' : ''].join(' ');
-    cells += `<button class="${cls}" data-day="${k}"><span>${d.getDate()}</span><span class="dots">${dots.map((c) => `<i style="--c:${c}"></i>`).join('')}</span></button>`;
+    cells += `<button class="${cls}" data-day="${k}"><span>${d.getDate()}</span><span class="dots">${dots.map(() => '<i></i>').join('')}</span></button>`;
   }
   return `<div class="cal-head"><b>${D.MONTHS[m.getMonth()]} ${m.getFullYear()}</b>
       <div class="nav"><button class="today-btn" data-cal="today">Today</button>
@@ -478,7 +506,7 @@ function calDay() {
   entries.sort((a, b) => a.r.done - b.r.done || a.d - b.d);
   const label = D.relDay(d);
   return `${sectionTitle(label === D.fmtDate(d) ? label : `${label} · ${D.MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`, entries.length, `<button class="link" data-add-day="${D.dateKey(d)}">+ Add</button>`)}
-    ${entries.length ? `<div class="items">${entries.map((e) => renderItem(e.r, { ghostDate: e.ghost ? e.d : null, timeOnly: true, compact: true })).join('')}</div>` : empty(orb('moon', 64), 'Free day', 'No reminders on this day.')}`;
+    ${entries.length ? `<div class="items" data-key="items:day">${entries.map((e) => renderItem(e.r, { ghostDate: e.ghost ? e.d : null, timeOnly: true, compact: true })).join('')}</div>` : empty(orb('moon', 64), 'Free day', 'No reminders on this day.', `e-day-${D.dateKey(d)}`)}`;
 }
 
 function shiftMonth(delta) {
@@ -521,16 +549,7 @@ function selectDay(d) {
   } else {
     $$('.cal-grid button', viewEl('calendar')).forEach((b) => b.classList.toggle('sel', b.dataset.day === D.dateKey(d)));
   }
-  const box = $('#calDay');
-  box.innerHTML = calDay();
-  if (!reduced())
-    box.animate(
-      [
-        { opacity: 0, transform: 'translateY(10px)' },
-        { opacity: 1, transform: 'none' },
-      ],
-      { duration: 320, easing: EASE },
-    );
+  render($('#calDay'), calDay());
 }
 
 /* =========================================================
@@ -538,62 +557,55 @@ function selectDay(d) {
    ========================================================= */
 const dirty = new Set(TABS);
 
-function flip(container, mutate) {
-  if (reduced()) return mutate();
-  const before = new Map();
-  const vh = innerHeight;
-  $$('[data-flip]', container).forEach((el) => {
-    const r = el.getBoundingClientRect();
-    if (r.bottom > -100 && r.top < vh + 100) before.set(el.dataset.flip, r);
-  });
-  mutate();
-  $$('[data-flip]', container).forEach((el) => {
-    const a = el.getBoundingClientRect();
-    if (a.bottom < -100 || a.top > vh + 100) return;
-    const b = before.get(el.dataset.flip);
-    if (b) {
-      const dx = b.left - a.left;
-      const dy = b.top - a.top;
-      if (Math.abs(dx) > 1 || Math.abs(dy) > 1)
-        el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 460, easing: EASE });
-    } else if (before.size) {
-      el.animate(
-        [
-          { opacity: 0, transform: 'scale(0.97)' },
-          { opacity: 1, transform: 'none' },
-        ],
-        { duration: 360, easing: EASE },
-      );
-    }
-  });
-}
-
 function stagger(root) {
-  if (reduced()) return;
+  if (reduced() || !root) return;
+  root.classList.remove('stagger');
+  void root.offsetWidth; // restart the CSS animation
   root.classList.add('stagger');
-  [...root.children].forEach((c, i) => c.style.setProperty('--i', Math.min(i, 10)));
-  setTimeout(() => root.classList.remove('stagger'), 900);
+  clearTimeout(root._st);
+  root._st = setTimeout(() => root.classList.remove('stagger'), 1100);
 }
 
 function renderView(name, { animate = false, enter = false } = {}) {
   const el = viewEl(name);
-  const html = `<div class="view-inner">${RENDER[name]()}</div>`;
-  // Keep horizontal scrollers (art carousel, chips) where the user left them.
-  const keep = $$('.carousel, .starters, .orb-row', el).map((x) => x.scrollLeft);
-  if (animate) flip(el, () => (el.innerHTML = html));
-  else el.innerHTML = html;
-  $$('.carousel, .starters, .orb-row', el).forEach((x, i) => keep[i] && (x.scrollLeft = keep[i]));
-  if (enter) stagger(el.firstElementChild);
+  let inner = el.firstElementChild;
+  if (!inner?.classList.contains('view-inner')) {
+    el.innerHTML = '<div class="view-inner"></div>';
+    inner = el.firstElementChild;
+  }
+  const html = RENDER[name]();
+  if (animate && !enter && name === ui.tab) render(inner, html);
+  else morph(inner, html);
+  if (enter) stagger(inner);
   mountArt(el);
   updateDots(el);
+  if (name === 'today') watchAskPill();
   dirty.delete(name);
 }
 
-function refresh() {
+function refresh({ animate = true } = {}) {
   TABS.forEach((t) => dirty.add(t));
-  if (!gesture.active) renderView(ui.tab, { animate: true });
-  if (ui.page) renderPage({ animate: true });
+  if (!gesture.active) renderView(ui.tab, { animate });
+  if (ui.page && !gesture.active) renderPage({ animate });
   updateBadges();
+}
+
+/* The floating + hides while the quick-add bar on Today is on screen. */
+let askIO = null;
+function watchAskPill() {
+  const pill = $('.view[data-view="today"] .ask-pill');
+  if (!('IntersectionObserver' in window) || askIO?._el === pill) return;
+  askIO ||= new IntersectionObserver(([e]) => {
+    ui.pillVisible = e.isIntersecting;
+    updateFab();
+  });
+  askIO.disconnect();
+  askIO._el = pill;
+  if (pill) askIO.observe(pill);
+}
+
+function updateFab() {
+  fab.classList.toggle('hidden', ui.tab === 'me' || (ui.tab === 'today' && ui.pillVisible));
 }
 
 function updateBadges() {
@@ -639,7 +651,7 @@ function syncChrome(name) {
   placeIndicator(name);
   $('#topTitle').textContent = TITLES[name];
   topbar.classList.toggle('scrolled', viewEl(name).scrollTop > 40);
-  fab.classList.toggle('hidden', name === 'me');
+  updateFab();
 }
 
 function settleViews(active) {
@@ -658,8 +670,10 @@ function setTab(name, { instant = false } = {}) {
     viewEl(name).scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' });
     return;
   }
-  haptic(6);
-  sfx.tab(TABS.indexOf(name));
+  if (!instant) {
+    haptic(6);
+    sfx.tab(TABS.indexOf(name));
+  }
   ui.tab = name;
   const wasDirty = dirty.has(name);
   if (wasDirty) renderView(name, { enter: !instant });
@@ -715,7 +729,7 @@ window.addEventListener(
   let s = null;
   viewsEl.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' || ui.page) return;
-    if (e.target.closest('.item-wrap, .cal-grid-wrap, input, select, textarea, .h-scroll, .segmented, .swatches')) return;
+    if (e.target.closest('.item-wrap, .cal-grid-wrap, input, select, textarea, .h-scroll, .segmented, .swatches, [data-ghost]')) return;
     s = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, active: false };
   });
   viewsEl.addEventListener('pointermove', (e) => {
@@ -811,18 +825,30 @@ viewsEl.addEventListener(
 /* =========================================================
    Overlays & history (Android back button support)
    ========================================================= */
+// Each open overlay owns one history entry, so the Android back gesture closes
+// it. Closing one overlay and opening another in the same tap (menu -> editor,
+// menu -> focus) reuses the entry instead of racing a back() against a push.
 const overlays = [];
 let ignorePops = 0;
+let owed = 0; // entries of closed overlays not yet popped
+let owedTimer = 0;
 function pushOverlay(name) {
   overlays.push(name);
-  history.pushState({ ov: overlays.length }, '');
+  if (owed > 0) owed--;
+  else history.pushState({ ov: overlays.length }, '');
 }
 function dropOverlay(name) {
   const i = overlays.lastIndexOf(name);
   if (i < 0) return;
   overlays.splice(i, 1);
-  ignorePops++;
-  history.back();
+  owed++;
+  clearTimeout(owedTimer);
+  owedTimer = setTimeout(() => {
+    if (!owed) return;
+    ignorePops++;
+    history.go(-owed);
+    owed = 0;
+  });
 }
 window.addEventListener('popstate', () => {
   if (ignorePops > 0) return void ignorePops--;
@@ -830,6 +856,7 @@ window.addEventListener('popstate', () => {
   if (top === 'page') closePage(true);
   else if (top === 'sheet') closeSheet(true);
   else if (top === 'composer') closeComposer(true);
+  else if (top === 'focus') minimizeFocus(true);
 });
 
 /* =========================================================
@@ -867,26 +894,27 @@ function pageContent() {
     glyph = sm.ico;
     rs = state.reminders.filter(sm.filter).sort(sm.sort || sortReminders);
   }
-  const head = `<div class="page-head"><div class="page-head-inner">
+  const head = `<div class="page-head-inner">
       <button class="back-btn" data-action="back">${icon('chev-left')}Back</button>
       <div class="title">${esc(title)}</div>
       ${p.type === 'list' ? `<button class="icon-btn" data-action="edit-list" data-id="${p.id}" aria-label="Edit list">${icon('more')}</button>` : p.key === 'completed' && rs.length ? `<button class="icon-btn" data-action="clear-completed" aria-label="Clear completed">${icon('trash')}</button>` : '<span style="width:40px"></span>'}
-    </div></div>`;
-  let body = `<div class="hero" style="padding-top:4px"><div class="page-hero">${orb(glyph, 60)}<div>
+    </div>`;
+  let body = `<div class="hero" data-key="page-hero" style="padding-top:4px"><div class="page-hero">${orb(glyph, 60)}<div>
       <h2>${esc(title)}</h2>
       <div class="hero-sub" style="margin-top:4px">${p.key === 'completed' ? plural(rs.length, 'completed reminder') : `${plural(rs.length, 'open reminder')}`}</div></div></div></div>`;
   if (p.type === 'list' || ['today', 'all', 'scheduled'].includes(p.key))
-    body += `<button class="add-list-btn" style="margin:0 0 12px" data-action="add-here">${icon('plus')}New reminder</button>`;
+    body += `<button class="add-list-btn" data-key="add-here" style="margin:0 0 12px" data-action="add-here">${icon('plus')}New reminder</button>`;
   body += rs.length
-    ? items(rs, { hideList })
+    ? items(rs, { hideList }, 'page')
     : empty(
         orb(p.key === 'completed' ? 'leaf' : 'spark', 64),
         p.key === 'completed' ? 'Nothing completed yet' : 'All clear',
         p.key === 'completed' ? 'Completed reminders will show up here.' : 'Nothing here right now.',
+        'e-page',
       );
   if (doneRs.length) {
     body += sectionTitle('Completed', doneRs.length, `<button class="link" data-action="toggle-done-list">${ui.showDoneInList ? 'Hide' : 'Show'}</button>`);
-    if (ui.showDoneInList) body += items(doneRs, { hideList, compact: true });
+    if (ui.showDoneInList) body += items(doneRs, { hideList, compact: true }, 'page-done');
   }
   return { head, body };
 }
@@ -906,45 +934,66 @@ function searchPage() {
   });
   rs.sort(sortReminders);
   const filters = [['open', 'Open'], ['all', 'All'], ['done', 'Completed'], ['high', 'Priority'], ...state.lists.map((l) => [`list:${l.id}`, l.name])];
-  const head = `<div class="page-head"><div class="page-head-inner">
+  const head = `<div class="page-head-inner">
       <button class="back-btn" data-action="back" aria-label="Back">${icon('chev-left')}</button>
       <label class="search-input">${icon('search')}<input id="searchInput" type="search" placeholder="Search reminders, notes, #tags" value="${esc(p.q || '')}" enterkeyhint="search"></label>
-    </div></div>`;
-  const body = `<div class="filter-row">${filters.map(([k, l]) => `<button class="chip-btn ${f === k ? 'on' : ''}" data-filter="${esc(k)}">${esc(l)}</button>`).join('')}</div>
-    <div id="searchResults">${searchResults(rs, q)}</div>`;
+    </div>`;
+  const body = `<div class="filter-row h-scroll" data-key="filters">${filters.map(([k, l]) => `<button class="chip-btn ${f === k ? 'on' : ''}" data-key="f:${esc(k)}" data-filter="${esc(k)}">${esc(l)}</button>`).join('')}</div>
+    <div id="searchResults" data-key="results">${searchResults(rs, q)}</div>`;
   return { head, body };
 }
 
 function searchResults(rs, q) {
-  if (!rs.length) return empty(orb('rings', 64), q ? 'No matches' : 'Nothing here', q ? `Nothing found for “${esc(q)}”.` : 'Try a different filter.');
-  return sectionTitle('Results', rs.length) + items(rs);
+  if (!rs.length)
+    return empty(orb('rings', 64), q ? 'No matches' : 'Nothing here', q ? `Nothing found for "${esc(q)}".` : 'Try a different filter.', 'e-search');
+  return sectionTitle('Results', rs.length) + items(rs, {}, 'results');
 }
 
 function renderPage({ animate = false, enter = false } = {}) {
   if (!ui.page) return;
-  // Search keeps its input alive while typing; only the results re-render.
-  if (ui.page.type === 'search' && $('#searchInput', pageEl) && !enter) {
-    const { body } = searchPage();
-    const tmp = document.createElement('div');
-    tmp.innerHTML = body;
-    $$('[data-filter]', pageEl).forEach((b) => b.classList.toggle('on', b.dataset.filter === (ui.page.filter || 'open')));
-    const res = $('#searchResults', pageEl);
-    flip(res, () => (res.innerHTML = $('#searchResults', tmp).innerHTML));
+  const { head, body } = pageContent();
+  let headEl = $('.page-head', pageEl);
+  let inner = $('.page-inner', pageEl);
+  if (enter || !headEl || !inner) {
+    pageEl.innerHTML = '<div class="page-head"></div><div class="page-scroll"><div class="page-inner"></div></div>';
+    headEl = $('.page-head', pageEl);
+    inner = $('.page-inner', pageEl);
+    morph(headEl, head);
+    morph(inner, body);
+    if (enter) stagger(inner);
     return;
   }
-  const { head, body } = pageContent();
-  const scroll = $('.page-scroll', pageEl);
-  if (scroll && animate) {
-    $('.page-head', pageEl).outerHTML = head;
-    flip(scroll, () => (scroll.innerHTML = body));
-  } else {
-    pageEl.innerHTML = `${head}<div class="page-scroll"><div class="page-inner">${body}</div></div>`;
-    if (enter) stagger($('.page-inner', pageEl));
-  }
+  morph(headEl, head);
+  if (animate) render(inner, body);
+  else morph(inner, body);
 }
 
 let pageAnims = [];
-const underlay = () => [viewsEl, topbar];
+const scrim = $('#scrim');
+const PARALLAX = 22; // % the app slides left under a pushed page
+const DIM = 0.5;
+
+function underlay(p) {
+  // p: 0 = page fully open, 1 = page fully closed
+  const x = `translateX(${-PARALLAX * (1 - p)}%)`;
+  viewsEl.style.transform = topbar.style.transform = p >= 1 ? '' : x;
+  scrim.style.opacity = String(DIM * (1 - p));
+  scrim.style.visibility = p >= 1 ? '' : 'visible';
+}
+
+function animateUnderlay(from, to, dur) {
+  const frames = (p) => ({ transform: `translateX(${-PARALLAX * (1 - p)}%)` });
+  return [
+    ...[viewsEl, topbar].map((el) => el.animate([frames(from), frames(to)], { duration: dur, easing: EASE })),
+    scrim.animate(
+      [
+        { opacity: DIM * (1 - from), visibility: 'visible' },
+        { opacity: DIM * (1 - to), visibility: 'visible' },
+      ],
+      { duration: dur, easing: EASE },
+    ),
+  ];
+}
 
 function openPage(p) {
   const wasOpen = !!ui.page;
@@ -957,19 +1006,9 @@ function openPage(p) {
   pageEl.classList.add('open');
   pageEl.setAttribute('aria-hidden', 'false');
   pageEl.style.transform = 'none';
+  underlay(0);
   if (!reduced()) {
-    pageAnims = [pageEl.animate([{ transform: 'translateX(100%)' }, { transform: 'none' }], { duration: 480, easing: EASE })];
-    underlay().forEach((el) =>
-      pageAnims.push(
-        el.animate(
-          [
-            { transform: 'none', filter: 'brightness(1)' },
-            { transform: 'translateX(-22%)', filter: 'brightness(.85)' },
-          ],
-          { duration: 480, easing: EASE, fill: 'forwards' },
-        ),
-      ),
-    );
+    pageAnims = [pageEl.animate([{ transform: 'translateX(100%)' }, { transform: 'none' }], { duration: 480, easing: EASE }), ...animateUnderlay(1, 0, 480)];
   }
   if (p.type === 'search') setTimeout(() => $('#searchInput')?.focus(), reduced() ? 0 : 280);
 }
@@ -986,8 +1025,8 @@ function closePage(fromPop = false, fromX = 0) {
     pageEl.classList.remove('open');
     pageEl.setAttribute('aria-hidden', 'true');
     pageEl.style.transform = '';
-    underlay().forEach((el) => (el.style.transform = el.style.filter = ''));
     pageEl.innerHTML = '';
+    underlay(1);
   };
   document.activeElement?.blur?.();
   if (dirty.has(ui.tab)) renderView(ui.tab);
@@ -995,19 +1034,10 @@ function closePage(fromPop = false, fromX = 0) {
   const p = fromX / w;
   pageAnims.forEach((a) => a.cancel());
   const dur = 380 * (1 - p * 0.6);
-  const a = pageEl.animate([{ transform: `translateX(${fromX}px)` }, { transform: 'translateX(100%)' }], { duration: dur, easing: EASE, fill: 'forwards' });
-  pageAnims = [a];
-  underlay().forEach((el) =>
-    pageAnims.push(
-      el.animate(
-        [
-          { transform: `translateX(${-22 * (1 - p)}%)`, filter: `brightness(${0.85 + 0.15 * p})` },
-          { transform: 'none', filter: 'brightness(1)' },
-        ],
-        { duration: dur, easing: EASE, fill: 'forwards' },
-      ),
-    ),
-  );
+  pageEl.style.transform = 'translateX(100%)';
+  underlay(1);
+  const a = pageEl.animate([{ transform: `translateX(${fromX}px)` }, { transform: 'translateX(100%)' }], { duration: dur, easing: EASE });
+  pageAnims = [a, ...animateUnderlay(p, 1, dur)];
   a.onfinish = finish;
 }
 
@@ -1016,7 +1046,7 @@ function closePage(fromPop = false, fromX = 0) {
   let s = null;
   pageEl.addEventListener('pointerdown', (e) => {
     if (e.pointerType === 'mouse' || !ui.page) return;
-    if (e.clientX > 40 && e.target.closest('.item-wrap, input, .filter-row')) return;
+    if (e.clientX > 40 && e.target.closest('.item-wrap, input, .h-scroll')) return;
     s = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId, active: false };
   });
   pageEl.addEventListener('pointermove', (e) => {
@@ -1026,7 +1056,7 @@ function closePage(fromPop = false, fromX = 0) {
     if (!s.active) {
       if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) return void (s = null);
       if (dx < 14 || dx < Math.abs(dy) * 1.3) return;
-      s.active = true;
+      s.active = gesture.active = true;
       s.w = pageEl.clientWidth;
       pageAnims.forEach((a) => a.cancel());
       pageAnims = [];
@@ -1035,31 +1065,27 @@ function closePage(fromPop = false, fromX = 0) {
       } catch {}
     }
     s.dx = Math.max(0, dx);
-    const p = s.dx / s.w;
     pageEl.style.transform = `translateX(${s.dx}px)`;
-    underlay().forEach((el) => {
-      el.style.transform = `translateX(${-22 * (1 - p)}%)`;
-      el.style.filter = `brightness(${0.85 + 0.15 * p})`;
-    });
+    underlay(s.dx / s.w);
   });
   const end = (e) => {
     if (!s || e.pointerId !== s.id) return;
     const st = s;
     s = null;
     if (!st.active) return;
+    gesture.active = false;
     swallowNextClick();
     const v = st.dx / (performance.now() - st.t);
     if (st.dx > st.w * 0.33 || v > 0.5) {
       closePage(false, st.dx);
     } else {
       const p = st.dx / st.w;
-      pageEl.animate([{ transform: `translateX(${st.dx}px)` }, { transform: 'none' }], { duration: 300, easing: EASE });
       pageEl.style.transform = 'none';
-      underlay().forEach((el) => {
-        el.animate([{ transform: `translateX(${-22 * (1 - p)}%)` }, { transform: 'translateX(-22%)' }], { duration: 300, easing: EASE });
-        el.style.transform = 'translateX(-22%)';
-        el.style.filter = 'brightness(.85)';
-      });
+      underlay(0);
+      pageAnims = [
+        pageEl.animate([{ transform: `translateX(${st.dx}px)` }, { transform: 'none' }], { duration: 320, easing: EASE }),
+        ...animateUnderlay(p, 0, 320),
+      ];
     }
   };
   pageEl.addEventListener('pointerup', end);
@@ -1232,7 +1258,7 @@ function showBanner(r, kind) {
   $('b', banner).textContent = r.title;
   banner.dataset.id = r.id;
   banner.classList.add('show');
-  N.chime();
+  sfx.alert();
   haptic([60, 40, 60]);
   clearTimeout(bannerTimer);
   bannerTimer = setTimeout(hideBanner, 8000);
@@ -1269,29 +1295,9 @@ banner.addEventListener('click', (e) => {
 /* =========================================================
    Actions
    ========================================================= */
-function collapse(wrap, dir = 0) {
-  return new Promise((resolve) => {
-    if (!wrap || reduced()) return resolve();
-    const h = wrap.offsetHeight;
-    const item = $('.item', wrap);
-    if (dir)
-      item.animate([{ transform: item.style.transform || 'none' }, { transform: `translateX(${dir * 110}%)` }], {
-        duration: 260,
-        easing: EASE,
-        fill: 'forwards',
-      });
-    const a = wrap.animate(
-      [
-        { height: `${h}px`, opacity: 1, marginBottom: '0px' },
-        { height: '0px', opacity: 0, marginBottom: '-8px' },
-      ],
-      { duration: 340, delay: dir ? 140 : 260, easing: EASE, fill: 'forwards' },
-    );
-    a.onfinish = resolve;
-  });
-}
+const wait = (ms) => new Promise((r) => setTimeout(r, reduced() ? 0 : ms));
 
-async function completeWithFeedback(id, wrap) {
+async function completeWithFeedback(id) {
   const r = getReminder(id);
   if (!r) return;
   if (r.done) {
@@ -1301,27 +1307,83 @@ async function completeWithFeedback(id, wrap) {
   }
   haptic(12);
   sfx.complete();
+  // Let the check animation land, then the list re-flows around the change.
   $$(`[data-toggle="${id}"]`).forEach((c) => c.classList.add('on'));
-  const rolling = isRepeating(r) && r.due;
-  if (!rolling) await collapse(wrap || $(`.view.active .item-wrap[data-id="${id}"], #page .item-wrap[data-id="${id}"]`));
-  else await new Promise((res) => setTimeout(res, reduced() ? 0 : 380));
+  await wait(340);
   const res = S.completeReminder(id);
   const after = getReminder(id);
-  if (res === 'rolled') undoToast(`Done! Next: ${D.fmtDue(after.due, h24())}`);
-  else undoToast(`Completed “${r.title.slice(0, 40)}”`);
-  if (S.stats().streak > 0 && state.log.filter((e) => D.sameDay(new Date(e.at), now())).length === 1) {
-    setTimeout(() => toast(`🔥 ${S.stats().streak}-day streak! Keep it going.`), 700);
-  }
+  if (res === 'rolled') undoToast(`Done. Next: ${D.fmtDue(after.due, h24())}`);
+  else undoToast(`Completed "${r.title.slice(0, 40)}"`);
+  const todayCount = state.log.filter((e) => D.sameDay(new Date(e.at), now())).length;
+  const streak = S.stats().streak;
+  if (todayCount === 1 && streak > 1) setTimeout(() => toast(`${streak}-day streak. Keep it going.`), 900);
 }
 
-async function deleteWithFeedback(id, wrap, dir = -1) {
+async function deleteWithFeedback(id, { swiped = false } = {}) {
   const r = getReminder(id);
   if (!r) return;
   haptic(16);
   sfx.remove();
-  await collapse(wrap || $(`.view.active .item-wrap[data-id="${id}"], #page .item-wrap[data-id="${id}"]`), dir);
+  if (swiped && !reduced()) {
+    // Finish the swipe off-screen before the list closes the gap.
+    $$(`.item-wrap[data-id="${id}"] .item`).forEach((el) =>
+      el.animate([{ transform: el.style.transform || 'none' }, { transform: 'translateX(-115%)' }], { duration: 220, easing: EASE, fill: 'forwards' }),
+    );
+    await wait(200);
+  }
   S.deleteReminder(id);
   undoToast('Reminder deleted');
+}
+
+/** Opens Google Calendar with the reminder filled in: calendar alarms are the most reliable on a phone. */
+function googleCalendarUrl(r) {
+  const start = new Date(r.due);
+  const end = new Date(start.getTime() + 30 * 60_000);
+  const f = (d) =>
+    d
+      .toISOString()
+      .replace(/[-:]/g, '')
+      .replace(/\.\d{3}/, '');
+  const p = new URLSearchParams({ action: 'TEMPLATE', text: r.title, dates: `${f(start)}/${f(end)}` });
+  const details = [r.notes, r.url].filter(Boolean).join('\n');
+  if (details) p.set('details', details);
+  const rule = rrule(r.repeat);
+  if (rule) p.set('recur', `RRULE:${rule}`);
+  return `https://calendar.google.com/calendar/render?${p}`;
+}
+
+function rrule(rep) {
+  if (!rep || rep.type === 'none') return '';
+  const n = Math.max(1, rep.interval || 1);
+  const BY = ['SU', 'MO', 'TU', 'WE', 'TH', 'FR', 'SA'];
+  return {
+    daily: `FREQ=DAILY;INTERVAL=${n}`,
+    weekly: `FREQ=WEEKLY;INTERVAL=${n}`,
+    biweekly: 'FREQ=WEEKLY;INTERVAL=2',
+    monthly: `FREQ=MONTHLY;INTERVAL=${n}`,
+    yearly: `FREQ=YEARLY;INTERVAL=${n}`,
+    weekdays: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
+    custom: `FREQ=WEEKLY;BYDAY=${(rep.days || []).map((d) => BY[d]).join(',')}`,
+  }[rep.type];
+}
+
+/** Move every overdue reminder to today: same time if it's still ahead, otherwise the next quarter hour after an hour from now. */
+function moveOverdueToToday() {
+  const start = D.startOfDay(now());
+  const ids = open()
+    .filter((r) => r.due && new Date(r.due) < start)
+    .map((r) => r.id);
+  if (!ids.length) return;
+  const soon = new Date(Date.now() + D.HOUR);
+  soon.setMinutes(Math.ceil(soon.getMinutes() / 15) * 15, 0, 0);
+  S.reschedule(ids, (r) => {
+    const d = new Date(r.due);
+    const t = D.withTime(now(), d.getHours(), d.getMinutes());
+    return (t > now() ? t : soon).toISOString();
+  });
+  haptic(10);
+  sfx.add();
+  undoToast(`Moved ${plural(ids.length, 'reminder')} to today`);
 }
 
 function snoozeMenu(id) {
@@ -1369,12 +1431,14 @@ function contextMenu(id) {
         <button class="row" data-m="done"><span class="ri" style="--c:var(--success)">${icon('check')}</span><span class="rl">${r.done ? 'Mark as not done' : 'Complete'}</span></button>
         <button class="row" data-m="edit"><span class="ri" style="--c:var(--accent)">${icon('edit')}</span><span class="rl">Edit</span></button>
         ${r.done ? '' : `<button class="row" data-m="snooze"><span class="ri" style="--c:#ffa94d">${icon('alarm')}</span><span class="rl">Snooze / postpone</span></button>`}
+        ${r.done ? '' : `<button class="row" data-m="focus"><span class="ri">${icon('target')}</span><span class="rl">Focus on this<small>Start a timer with a calm soundscape</small></span></button>`}
+        ${r.due && !r.done ? `<button class="row" data-m="gcal"><span class="ri">${icon('calendar-plus')}</span><span class="rl">Add to Google Calendar<small>For alarms that never miss</small></span></button>` : ''}
         <button class="row" data-m="pin"><span class="ri" style="--c:#cc5de8">${icon('pin')}</span><span class="rl">${r.pinned ? 'Unpin' : 'Pin to top'}</span></button>
         <button class="row" data-m="dup"><span class="ri" style="--c:#4dabf7">${icon('copy')}</span><span class="rl">Duplicate</span></button>
         ${r.url ? `<button class="row" data-m="link"><span class="ri" style="--c:#20c997">${icon('link')}</span><span class="rl">Open link</span></button>` : ''}
         <button class="row danger" data-m="del"><span class="ri" style="--c:var(--danger)">${icon('trash')}</span><span class="rl">Delete</span></button>
       </div>`;
-    $('h3', root).textContent = r.title.length > 28 ? r.title.slice(0, 28) + '…' : r.title;
+    $('h3', root).textContent = r.title.length > 28 ? r.title.slice(0, 28) + '...' : r.title;
     root.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b) return;
@@ -1383,6 +1447,8 @@ function contextMenu(id) {
       if (m === 'edit') return openEditor(r);
       if (m === 'snooze') return snoozeMenu(id);
       closeSheet();
+      if (m === 'focus') openFocus({ rid: id });
+      if (m === 'gcal') window.open(googleCalendarUrl(r), '_blank', 'noopener');
       if (m === 'done') completeWithFeedback(id);
       if (m === 'pin') S.togglePin(id);
       if (m === 'dup') {
@@ -1398,23 +1464,24 @@ function contextMenu(id) {
 /* Item gestures: tap to open, swipe right to complete, left to delete, long-press for menu */
 (function itemGestures() {
   let g = null;
+  let lastLongPress = 0;
   document.addEventListener('pointerdown', (e) => {
     const item = e.target.closest('.item');
     if (!item || e.target.closest('.check') || e.button > 0) return;
     const wrap = item.closest('.item-wrap');
     const id = wrap?.dataset.id;
-    if (!id) return;
-    g = { item, wrap, id, x: e.clientX, y: e.clientY, pid: e.pointerId, active: false, long: false };
+    if (!id || wrap.hasAttribute('data-ghost')) return;
+    g = { item, wrap, id, x: e.clientX, y: e.clientY, pid: e.pointerId, active: false };
     item.classList.add('pressed');
     g.lp = setTimeout(() => {
       if (!g || g.active) return;
-      g.long = true;
+      lastLongPress = performance.now();
       item.classList.remove('pressed');
-      swallowNextClick();
       suppressClick = true;
       setTimeout(() => (suppressClick = false), 700);
       contextMenu(id);
-    }, 520);
+      g = null;
+    }, 500);
   });
   document.addEventListener('pointermove', (e) => {
     if (!g || e.pointerId !== g.pid) return;
@@ -1427,10 +1494,11 @@ function contextMenu(id) {
       }
       if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) return void (g = null);
       if (Math.abs(dx) < 12 || e.pointerType === 'mouse') return;
-      g.active = true;
+      g.active = gesture.active = true;
       try {
         g.item.setPointerCapture(e.pointerId);
       } catch {}
+      g.wrap.classList.add('dragging');
       g.bgR = $('.item-actions-bg.right', g.wrap);
       g.bgL = $('.item-actions-bg.left', g.wrap);
     }
@@ -1442,8 +1510,11 @@ function contextMenu(id) {
     const over = Math.abs(g.dx) > 90;
     if (over !== g.over) {
       g.over = over;
-      if (over) haptic(10);
-      (g.dx > 0 ? g.bgR : g.bgL).animate([{ filter: 'brightness(1)' }, { filter: `brightness(${over ? 1.15 : 1})` }], { duration: 150, fill: 'forwards' });
+      g.wrap.classList.toggle('armed', over);
+      if (over) {
+        haptic(10);
+        sfx.tap();
+      }
     }
   });
   const end = (e) => {
@@ -1453,28 +1524,31 @@ function contextMenu(id) {
     clearTimeout(st.lp);
     st.item.classList.remove('pressed');
     if (!st.active) return;
+    gesture.active = false;
     swallowNextClick();
     const dx = st.dx || 0;
+    st.wrap.classList.remove('dragging', 'armed');
     const reset = () => {
-      st.item.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: 420, easing: SPRING });
       st.item.style.transform = '';
-      [st.bgR, st.bgL].forEach((b) => b.animate([{ opacity: b.style.opacity }, { opacity: 0 }], { duration: 300, fill: 'forwards' }));
+      st.item.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], { duration: 460, easing: SPRING });
+      st.bgR.style.opacity = st.bgL.style.opacity = '0';
     };
     if (dx > 90) {
       reset();
-      completeWithFeedback(st.id, st.wrap);
+      completeWithFeedback(st.id);
     } else if (dx < -90) {
-      deleteWithFeedback(st.id, st.wrap, -1);
+      deleteWithFeedback(st.id, { swiped: true });
     } else reset();
+    if (dirty.has(ui.tab)) refresh();
   };
   document.addEventListener('pointerup', end);
   document.addEventListener('pointercancel', end);
   document.addEventListener('contextmenu', (e) => {
     const wrap = e.target.closest('.item-wrap[data-id]');
-    if (wrap && e.pointerType !== 'touch') {
-      e.preventDefault();
-      contextMenu(wrap.dataset.id);
-    } else if (wrap) e.preventDefault();
+    if (!wrap) return;
+    e.preventDefault();
+    // Touch long-presses are handled above; this is for mouse right-clicks.
+    if (performance.now() - lastLongPress > 1000 && e.pointerType !== 'touch') contextMenu(wrap.dataset.id);
   });
 })();
 
@@ -1551,6 +1625,8 @@ function openEditor(existing, preset = {}) {
         isNew
           ? ''
           : `<div class="sheet-actions">
+        ${draft.done ? '' : `<button class="btn" data-x="focus">${icon('target')}Focus</button>`}
+        ${draft.due && !draft.done ? `<button class="btn" data-x="gcal">${icon('calendar-plus')}Calendar</button>` : ''}
         <button class="btn" data-x="dup">${icon('copy')}Duplicate</button>
         <button class="btn danger" data-x="del">${icon('trash')}Delete</button>
       </div>`
@@ -1734,6 +1810,11 @@ function openEditor(existing, preset = {}) {
         S.duplicateReminder(draft.id);
         return undoToast('Duplicated');
       }
+      if (x === 'focus') {
+        closeSheet();
+        return openFocus({ rid: draft.id, title: draft.title.trim() });
+      }
+      if (x === 'gcal') return window.open(googleCalendarUrl(draft), '_blank', 'noopener');
       if (b.dataset.quick) {
         setDue(quick[+b.dataset.quick][1]());
         b.animate([{ transform: 'scale(.9)' }, { transform: 'none' }], { duration: 300, easing: SPRING });
@@ -1887,22 +1968,23 @@ function parseComposer() {
 function updateComposer() {
   const p = parseComposer();
   $('#composerSend').disabled = !p.title;
+  $('#composerSuggest').classList.toggle('hide', !!cInput.value.trim());
   const chips = [];
-  if (p.due) chips.push(`<span class="parsed">${icon('clock')}${D.fmtDue(p.due.toISOString(), h24())}</span>`);
-  if (p.repeat) chips.push(`<span class="parsed">${icon('repeat')}${esc(D.repeatLabel(p.repeat))}</span>`);
-  if (p.priority) chips.push(`<span class="parsed" style="color:${PRIORITIES[p.priority].color}">${icon('flag')}${PRIORITIES[p.priority].label}</span>`);
+  if (p.due) chips.push(`<span class="parsed" data-key="due">${icon('clock')}${D.fmtDue(p.due.toISOString(), h24())}</span>`);
+  if (p.repeat) chips.push(`<span class="parsed" data-key="repeat">${icon('repeat')}${esc(D.repeatLabel(p.repeat))}</span>`);
+  if (p.priority) chips.push(`<span class="parsed" data-key="prio">${icon('flag')}${PRIORITIES[p.priority].label}</span>`);
   if (p.listId) {
     const l = getList(p.listId);
-    chips.push(`<span class="parsed">${orb(glyphFor(l), 14)}${esc(l.name)}</span>`);
+    chips.push(`<span class="parsed" data-key="list">${orb(glyphFor(l), 14)}${esc(l.name)}</span>`);
   }
-  p.tags.forEach((t) => chips.push(`<span class="parsed">#${esc(t)}</span>`));
-  const box = $('#composerChips');
-  const html = chips.join('');
-  if (box.dataset.html !== html) {
-    box.innerHTML = html;
-    box.dataset.html = html;
-  }
+  p.tags.forEach((t) => chips.push(`<span class="parsed" data-key="tag:${esc(t)}">#${esc(t)}</span>`));
+  // Morph so only new chips pop in; edited ones just update their text.
+  morph($('#composerChips'), chips.join(''));
 }
+
+$('#starters').innerHTML = STARTERS.map(
+  ([ic, label, text]) => `<button type="button" class="starter" data-starter="${esc(text)}">${icon(ic)}${label}</button>`,
+).join('');
 
 cInput.addEventListener('input', updateComposer);
 cBackdrop.addEventListener('click', () => closeComposer());
@@ -1929,6 +2011,14 @@ composer.addEventListener('submit', (e) => {
   });
 });
 composer.addEventListener('click', (e) => {
+  const st = e.target.closest('[data-starter]');
+  if (st) {
+    cInput.value = st.dataset.starter;
+    updateComposer();
+    cInput.focus();
+    cInput.setSelectionRange(cInput.value.length, cInput.value.length);
+    return;
+  }
   const b = e.target.closest('button[data-q]');
   if (b) {
     const q = b.dataset.q;
@@ -1971,7 +2061,7 @@ async function enableNotifications() {
     S.updateSettings({ notifications: true });
     N.testNotification();
     N.scheduleAhead();
-    toast('Notifications enabled 🔔');
+    toast('Notifications enabled');
   } else if (p === 'denied') {
     S.updateSettings({ notifications: false });
     toast('Notifications are blocked. Allow them in your browser/site settings.', { ms: 6000 });
@@ -2006,7 +2096,7 @@ document.addEventListener('click', (e) => {
   const toggle = t.closest('[data-toggle]');
   if (toggle) {
     e.stopPropagation();
-    return completeWithFeedback(toggle.dataset.toggle, toggle.closest('.item-wrap'));
+    return completeWithFeedback(toggle.dataset.toggle);
   }
 
   const openEl = t.closest('[data-open]');
@@ -2078,9 +2168,6 @@ document.addEventListener('click', (e) => {
   const go = t.closest('[data-go]');
   if (go) return setTab(go.dataset.go);
 
-  const starter = t.closest('[data-starter]');
-  if (starter) return openComposer({ text: starter.dataset.starter });
-
   const act = t.closest('[data-action]');
   if (!act) return;
   switch (act.dataset.action) {
@@ -2088,6 +2175,10 @@ document.addEventListener('click', (e) => {
       return closePage();
     case 'compose':
       return openComposer();
+    case 'focus':
+      return openFocus();
+    case 'overdue-today':
+      return moveOverdueToToday();
     case 'enable-notifs':
       return enableNotifications();
     case 'dismiss-notice':
@@ -2125,7 +2216,7 @@ document.addEventListener('click', (e) => {
 
 function confirmSheet(title, text, cta, onYes) {
   openSheet((root) => {
-    root.innerHTML = `<div style="text-align:center;padding:10px 6px 4px"><div style="font-size:42px">⚠️</div><h3 style="margin:8px 0 6px"></h3><p style="color:var(--text-2);margin:0 0 18px"></p></div>
+    root.innerHTML = `<div style="text-align:center;padding:14px 6px 4px"><div style="display:grid;place-items:center;color:var(--danger)">${orb('slash', 56)}</div><h3 style="margin:14px 0 6px;font-weight:500"></h3><p style="color:var(--text-2);margin:0 0 20px"></p></div>
       <div class="sheet-actions"><button class="btn" data-c="no">Cancel</button><button class="btn primary" style="background:var(--danger)" data-c="yes"></button></div>`;
     $('h3', root).textContent = title;
     $('p', root).textContent = text;
@@ -2216,6 +2307,7 @@ fab.addEventListener('click', () => {
 document.addEventListener('keydown', (e) => {
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName);
   if (e.key === 'Escape') {
+    if (isFocusOpen()) return minimizeFocus();
     if (composerOpen) return closeComposer();
     if (sheetOpen) return closeSheet();
     if (ui.page) return closePage();
@@ -2227,7 +2319,8 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === '/') {
     e.preventDefault();
     openPage({ type: 'search', q: '', filter: 'open' });
-  } else if (/^[1-5]$/.test(e.key) && !sheetOpen && !ui.page) setTab(TABS[+e.key - 1]);
+  } else if (/^[1-5]$/.test(e.key) && !sheetOpen && !ui.page && !isFocusOpen()) setTab(TABS[+e.key - 1]);
+  else if (e.key === 'f' && !sheetOpen) openFocus();
 });
 
 /* =========================================================
@@ -2236,8 +2329,7 @@ document.addEventListener('keydown', (e) => {
 function handleAction({ action, id, view, at }) {
   const r = id && getReminder(id);
   if (action === 'done' && r && !r.done) {
-    S.completeReminder(id);
-    toast(`Completed “${r.title.slice(0, 40)}”`, { action: 'Undo', onAction: S.undo });
+    completeWithFeedback(id);
   } else if (action === 'snooze' && r) {
     S.snoozeReminder(id, 10, at || Date.now());
     toast(`Snoozed until ${D.fmtTime(new Date(getReminder(id).snoozedUntil), h24())}`);
@@ -2290,29 +2382,29 @@ function tick() {
   }
   if (n.getMinutes() !== ui.lastMinute) {
     ui.lastMinute = n.getMinutes();
-    // Refresh countdowns / overdue states without disturbing interactions
-    if (!gesture.active && !sheetOpen && !composerOpen && document.visibilityState === 'visible') {
-      TABS.forEach((t) => dirty.add(t));
-      renderView(ui.tab, { animate: true });
-      if (ui.page && ui.page.type !== 'search') renderPage({ animate: true });
-      updateBadges();
-    }
+    // Refresh countdowns and overdue states. Morphing only touches what changed.
+    if (document.visibilityState === 'visible') refresh();
   }
 }
 
 function boot() {
   applyTheme();
   S.subscribe((reason) => {
-    if (reason === 'settings') {
-      // The settings screen is live; other views pick up changes when shown.
-      TABS.forEach((t) => t !== ui.tab && dirty.add(t));
-      return;
-    }
+    if (reason === 'settings') return refresh({ animate: false });
     refresh();
-    N.scheduleAhead();
+    if (reason !== 'focus') N.scheduleAhead();
   });
   setTab('today', { instant: true });
   updateBadges();
+  initFocus({
+    icon,
+    toast,
+    haptic,
+    pushOverlay,
+    dropOverlay,
+    complete: (id) => completeWithFeedback(id),
+    onChange: () => refresh({ animate: false }),
+  });
 
   // Opening sequence: the splash orb draws itself, then dissolves as the app
   // un-blurs and the content rises in. Tap to skip.
@@ -2339,8 +2431,25 @@ function boot() {
     N.scheduleAhead();
     drainQueue();
   });
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && drainQueue());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      drainQueue();
+      tick();
+      swReg?.update().catch(() => {});
+    } else S.flush(); // Android may kill a backgrounded app without a pagehide
+  });
   addEventListener('pagehide', S.flush);
+
+  // New version installed by the service worker: during the splash we just
+  // reload into it; later we offer it instead of interrupting.
+  const hadController = !!navigator.serviceWorker?.controller;
+  let swReg = null;
+  navigator.serviceWorker?.getRegistration().then((r) => (swReg = r));
+  navigator.serviceWorker?.addEventListener('controllerchange', () => {
+    if (!hadController) return;
+    if (performance.now() < 4000) location.reload();
+    else toast('Remindly was updated', { action: 'Reload', onAction: () => location.reload(), ms: 8000 });
+  });
 
   const params = new URLSearchParams(location.search);
   if ([...params.keys()].length) history.replaceState(null, '', location.pathname);

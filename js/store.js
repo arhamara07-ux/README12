@@ -6,9 +6,6 @@ const listeners = new Set();
 
 export const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4);
 
-export const LIST_COLORS = ['#5b5bf6', '#ff6b6b', '#ffa94d', '#ffd43b', '#51cf66', '#20c997', '#22b8cf', '#4dabf7', '#cc5de8', '#f06595', '#868e96'];
-export const LIST_ICONS = ['📌', '🏠', '💼', '🛒', '❤️', '💊', '💸', '🎓', '✈️', '🎉', '🏋️', '🐶', '🌱', '📚', '🎮', '🍳', '🚗', '🧾', '🎁', '⭐'];
-
 export const PRIORITIES = [
   { v: 0, label: 'None', color: 'var(--muted)' },
   { v: 1, label: 'Low', color: '#4dabf7' },
@@ -30,15 +27,17 @@ const defaultSettings = () => ({
   digestTime: '08:00',
   showCompleted: false,
   name: '',
+  focusMinutes: 25,
+  focusSound: true,
 });
 
 function seed() {
   const lists = [
-    { id: 'personal', name: 'Personal', color: '#5b5bf6', icon: '🏠', glyph: 'loop' },
-    { id: 'work', name: 'Work', color: '#4dabf7', icon: '💼', glyph: 'grid' },
-    { id: 'shopping', name: 'Shopping', color: '#51cf66', icon: '🛒', glyph: 'bag' },
-    { id: 'health', name: 'Health', color: '#ff6b6b', icon: '❤️', glyph: 'wave' },
-    { id: 'bills', name: 'Bills', color: '#ffa94d', icon: '💸', glyph: 'rings' },
+    { id: 'personal', name: 'Personal', glyph: 'loop' },
+    { id: 'work', name: 'Work', glyph: 'grid' },
+    { id: 'shopping', name: 'Shopping', glyph: 'bag' },
+    { id: 'health', name: 'Health', glyph: 'wave' },
+    { id: 'bills', name: 'Bills', glyph: 'rings' },
   ];
   const at = (days, h, m = 0) => {
     const d = new Date();
@@ -49,8 +48,8 @@ function seed() {
   const r = (o) => ({ ...blankReminder(), ...o });
   const reminders = [
     r({
-      title: 'Welcome to Remindly 👋',
-      notes: 'Tap a reminder to edit it. Swipe right to complete, left to delete. Try the quick-add bar: "Call mom tomorrow at 6pm #personal !!"',
+      title: 'Welcome to Remindly',
+      notes: 'Tap a reminder to edit it. Swipe right to complete, left to delete, or hold for more. Try typing "Call mom tomorrow at 6pm #personal !!"',
       listId: 'personal',
       pinned: true,
     }),
@@ -68,7 +67,15 @@ function seed() {
     r({ title: 'Pay phone bill', due: at(5, 10), listId: 'bills', priority: 3, repeat: { type: 'monthly', interval: 1 } }),
     r({ title: 'Plan the week', due: at(1, 9), listId: 'work', priority: 2, tags: ['planning'] }),
   ];
-  return { version: 1, lists, reminders, log: [], settings: defaultSettings(), meta: { created: Date.now(), lastDigest: null, onboarded: false, design: 2 } };
+  return {
+    version: 1,
+    lists,
+    reminders,
+    log: [],
+    focusLog: [],
+    settings: defaultSettings(),
+    meta: { created: Date.now(), lastDigest: null, onboarded: false, design: 3, focus: null },
+  };
 }
 
 export function blankReminder() {
@@ -101,6 +108,7 @@ function load() {
     s.settings = { ...defaultSettings(), ...s.settings };
     s.meta = { lastDigest: null, onboarded: true, ...s.meta };
     s.log = s.log || [];
+    s.focusLog = s.focusLog || [];
     s.lists = s.lists || [];
     s.reminders = (s.reminders || []).map((r) => ({ ...blankReminder(), ...r }));
     // One-time move to the monochrome "v2" look.
@@ -108,6 +116,13 @@ function load() {
       s.settings.theme = 'dark';
       s.settings.accent = 'mono';
       s.meta.design = 2;
+    }
+    // v3: no emoji anywhere in the interface.
+    if (s.meta.design < 3) {
+      s.reminders.forEach((r) => {
+        if (r.title === 'Welcome to Remindly \u{1F44B}') r.title = 'Welcome to Remindly';
+      });
+      s.meta.design = 3;
     }
     return s;
   } catch (e) {
@@ -165,7 +180,7 @@ export function undo() {
 
 /* ---------- Queries ---------- */
 export const getReminder = (id) => state.reminders.find((r) => r.id === id);
-export const getList = (id) => state.lists.find((l) => l.id === id) || state.lists[0] || { id: 'none', name: 'Reminders', color: '#868e96', icon: '📌' };
+export const getList = (id) => state.lists.find((l) => l.id === id) || state.lists[0] || { id: 'none', name: 'Reminders', glyph: 'loop' };
 
 export function sortReminders(a, b) {
   if (a.done !== b.done) return a.done ? 1 : -1;
@@ -298,6 +313,28 @@ export function markFired(id, key) {
   persist();
 }
 
+/** Move several reminders at once (e.g. "move overdue to today"). `when(r)` returns the new ISO due date. */
+export function reschedule(ids, when) {
+  snapshot();
+  ids.forEach((id) => {
+    const r = getReminder(id);
+    if (!r) return;
+    r.due = when(r);
+    r.fired = [];
+    r.snoozedUntil = null;
+    skipPastAlerts(r);
+  });
+  emit('reschedule');
+}
+
+/** Record a finished focus session (ms of focused time). */
+export function logFocus(ms, rid = null) {
+  if (ms < 60_000) return;
+  state.focusLog.push({ at: Date.now(), ms: Math.round(ms), rid });
+  if (state.focusLog.length > 3000) state.focusLog.splice(0, state.focusLog.length - 3000);
+  emit('focus');
+}
+
 export function clearCompleted() {
   snapshot();
   const n = state.reminders.filter((r) => r.done).length;
@@ -357,6 +394,7 @@ export function importData(json) {
   state.reminders = s.reminders.map((r) => ({ ...blankReminder(), ...r }));
   state.lists = s.lists;
   state.log = s.log || [];
+  state.focusLog = s.focusLog || [];
   state.settings = { ...defaultSettings(), ...s.settings };
   emit('import');
 }
@@ -397,6 +435,21 @@ export function stats() {
   });
   const open = state.reminders.filter((r) => !r.done);
   const overdue = open.filter((r) => r.due && new Date(r.due) < now).length;
-  const perList = state.lists.map((l) => ({ list: l, count: state.log.filter((e) => e.listId === l.id).length }));
-  return { week, streak, best, total: state.log.length, weekTotal: week.reduce((a, b) => a + b.count, 0), open: open.length, overdue, perList };
+  const weekStart = new Date(now);
+  weekStart.setDate(weekStart.getDate() - 6);
+  weekStart.setHours(0, 0, 0, 0);
+  const focusWeek = state.focusLog.filter((e) => e.at >= weekStart.getTime()).reduce((a, e) => a + e.ms, 0);
+  const focusToday = state.focusLog.filter((e) => dayKey(e.at) === dayKey(now)).reduce((a, e) => a + e.ms, 0);
+  return {
+    week,
+    streak,
+    best,
+    total: state.log.length,
+    weekTotal: week.reduce((a, b) => a + b.count, 0),
+    open: open.length,
+    overdue,
+    focusWeek,
+    focusToday,
+    focusSessions: state.focusLog.length,
+  };
 }

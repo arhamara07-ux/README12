@@ -226,13 +226,11 @@ body.ready #splash .splash-inner {
   background: var(--bg);
   transition:
     transform 1.1s var(--ease),
-    filter 1s var(--ease),
-    opacity 0.9s var(--ease);
+    opacity 0.8s var(--ease);
 }
 /* App reveal after the splash */
 body:not(.ready) .app {
-  transform: scale(0.94);
-  filter: blur(10px);
+  transform: scale(0.96);
   opacity: 0;
 }
 @media (min-width: 760px) {
@@ -314,7 +312,6 @@ body:not(.ready) .app {
   overscroll-behavior: contain;
   padding: calc(var(--topbar-h) + var(--safe-top)) 18px calc(var(--tabbar-h) + var(--safe-bottom) + 100px);
   visibility: hidden;
-  will-change: transform, opacity;
   contain: layout paint;
   touch-action: pan-y;
   scrollbar-width: none;
@@ -565,8 +562,9 @@ body:not(.ready) .app {
   gap: 12px;
   overflow-x: auto;
   scroll-snap-type: x mandatory;
-  margin: 0 -18px;
-  padding: 0 18px 4px;
+  /* room for the card shadow, which a scroll container would otherwise clip */
+  margin: 0 -18px -22px;
+  padding: 0 18px 26px;
   scrollbar-width: none;
   overscroll-behavior-x: contain;
 }
@@ -590,7 +588,7 @@ body:not(.ready) .app {
 }
 :root:not([data-theme='dark']) .art-card {
   border-color: transparent;
-  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.55);
+  box-shadow: 0 14px 24px -16px rgba(0, 0, 0, 0.6);
 }
 .art-card:active {
   transform: scale(0.975);
@@ -660,7 +658,7 @@ body:not(.ready) .app {
 }
 
 /* ============ Focus pill (quick add entry) ============ */
-.focus-pill {
+.ask-pill {
   position: relative;
   width: 100%;
   margin-top: 28px;
@@ -681,7 +679,7 @@ body:not(.ready) .app {
     transform 0.4s var(--ease-spring),
     border-color 0.3s;
 }
-.focus-pill::before {
+.ask-pill::before {
   content: '';
   position: absolute;
   inset: -60% -20%;
@@ -689,16 +687,16 @@ body:not(.ready) .app {
   background: radial-gradient(28% 50% at 30% 50%, var(--glow), transparent 70%), radial-gradient(22% 50% at 72% 50%, var(--glow), transparent 70%);
   animation: drift 7s ease-in-out infinite alternate;
 }
-:root[data-theme='dark'] .focus-pill {
+:root[data-theme='dark'] .ask-pill {
   background: linear-gradient(90deg, #0a0a0a, #151515 50%, #0a0a0a);
 }
-.focus-pill:active {
+.ask-pill:active {
   transform: scale(0.98);
 }
-.focus-pill > span:first-child {
+.ask-pill > span:first-child {
   flex: 1;
 }
-.focus-pill .plus {
+.ask-pill .plus {
   width: 38px;
   height: 38px;
   border-radius: 50%;
@@ -707,7 +705,7 @@ body:not(.ready) .app {
   background: var(--text);
   color: var(--bg);
 }
-.focus-pill .plus svg {
+.ask-pill .plus svg {
   width: 20px;
   height: 20px;
   stroke-width: 2.4;
@@ -721,30 +719,42 @@ body:not(.ready) .app {
   }
 }
 
-/* ============ Starter chips ============ */
-.starters {
+/* ============ Composer suggestions (shown while the input is empty) ============ */
+.composer-suggest {
   display: grid;
-  grid-auto-flow: column;
-  grid-template-rows: repeat(2, auto);
-  justify-content: start;
-  gap: 10px;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 0.4s var(--ease),
+    opacity 0.3s var(--ease);
+}
+.composer-suggest.hide {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+.composer-suggest > div {
+  overflow: hidden;
+}
+.starters {
+  display: flex;
+  gap: 8px;
   overflow-x: auto;
-  margin: 14px -18px 0;
-  padding: 0 18px 2px;
+  margin: 0 -16px;
+  padding: 12px 16px 0;
   scrollbar-width: none;
 }
 .starters::-webkit-scrollbar {
   display: none;
 }
 .starter {
+  flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  height: 50px;
-  padding: 0 20px 0 16px;
-  border-radius: 25px;
-  background: var(--surface-2);
-  font-size: 14.5px;
+  gap: 9px;
+  height: 44px;
+  padding: 0 18px 0 14px;
+  border-radius: 22px;
+  border: 1px solid var(--line-strong);
+  font-size: 14px;
   white-space: nowrap;
   transition:
     transform 0.35s var(--ease-spring),
@@ -752,11 +762,11 @@ body:not(.ready) .app {
 }
 .starter:active {
   transform: scale(0.94);
-  background: var(--surface-3);
+  background: var(--surface-2);
 }
 .starter svg {
-  width: 19px;
-  height: 19px;
+  width: 18px;
+  height: 18px;
 }
 
 /* ============ Orb icons (line art in a circle) ============ */
@@ -1016,21 +1026,42 @@ body:not(.ready) .app {
   transition: width 0.6s var(--ease);
 }
 
-/* Entrance stagger: rise out of a soft blur */
+/* Entrance stagger: content rises into place */
 .stagger > * {
-  animation: rise 0.8s var(--ease) both;
-  animation-delay: calc(var(--i, 0) * 55ms);
+  animation: rise 0.75s var(--ease) both;
+}
+.stagger > :nth-child(2) {
+  animation-delay: 45ms;
+}
+.stagger > :nth-child(3) {
+  animation-delay: 90ms;
+}
+.stagger > :nth-child(4) {
+  animation-delay: 135ms;
+}
+.stagger > :nth-child(5) {
+  animation-delay: 180ms;
+}
+.stagger > :nth-child(6) {
+  animation-delay: 225ms;
+}
+.stagger > :nth-child(7) {
+  animation-delay: 270ms;
+}
+.stagger > :nth-child(8) {
+  animation-delay: 315ms;
+}
+.stagger > :nth-child(n + 9) {
+  animation-delay: 360ms;
 }
 @keyframes rise {
   from {
     opacity: 0;
-    transform: translateY(18px);
-    filter: blur(6px);
+    transform: translateY(16px);
   }
   to {
     opacity: 1;
     transform: none;
-    filter: none;
   }
 }
 .flash {
@@ -1808,6 +1839,8 @@ button.row:active {
   text-overflow: ellipsis;
 }
 .page-scroll {
+  position: relative;
+  touch-action: pan-y;
   flex: 1;
   overflow-y: auto;
   padding: 18px 18px calc(40px + var(--safe-bottom));
@@ -1923,9 +1956,7 @@ button.row:active {
   position: fixed;
   inset: 0;
   z-index: 60;
-  background: rgba(0, 0, 0, 0.55);
-  -webkit-backdrop-filter: blur(6px);
-  backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.62);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.45s var(--ease);
@@ -2021,14 +2052,12 @@ button.row:active {
 }
 @keyframes chipIn {
   from {
-    transform: scale(0.6);
+    transform: scale(0.7);
     opacity: 0;
-    filter: blur(4px);
   }
   to {
     transform: none;
     opacity: 1;
-    filter: none;
   }
 }
 .composer-tools {
@@ -2631,4 +2660,436 @@ button.row:active {
 }
 :root[data-theme='dark'] .switch input:checked + span::after {
   background: #000;
+}
+
+/* ============ Page scrim (dims the app behind a pushed page) ============ */
+.scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 35;
+  background: #000;
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+
+.meta span,
+.focus-time,
+.focus-live .t,
+.stat b {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ============ Focus mode ============ */
+.focus {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: calc(var(--safe-top) + 10px) 22px calc(var(--safe-bottom) + 28px);
+  background: #000;
+  color: #fff;
+  overflow: hidden;
+  isolation: isolate;
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(1.04);
+  transition:
+    opacity 0.55s var(--ease),
+    transform 0.7s var(--ease),
+    visibility 0.55s;
+}
+.focus.show {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+/* A closed overlay must never catch a tap, even while it fades out */
+.focus:not(.show),
+.focus:not(.show) * {
+  pointer-events: none !important;
+}
+.focus canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+}
+.focus-head {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.focus-eyebrow {
+  font-size: 12px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  padding-left: 0.32em;
+  color: rgba(255, 255, 255, 0.55);
+}
+.f-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #fff;
+  transition:
+    background-color 0.25s,
+    transform 0.35s var(--ease-spring),
+    opacity 0.3s;
+}
+.f-icon:active {
+  transform: scale(0.88);
+  background: rgba(255, 255, 255, 0.1);
+}
+.f-icon.off {
+  opacity: 0.45;
+}
+.focus-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+  width: 100%;
+}
+.focus-task {
+  max-width: 88%;
+  text-align: center;
+  font-size: 17px;
+  color: rgba(255, 255, 255, 0.78);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.focus-dial {
+  position: relative;
+  width: min(74vw, 330px, 44vh);
+  aspect-ratio: 1;
+}
+.focus-dial svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  transform: rotate(-90deg);
+  overflow: visible;
+}
+.focus-dial circle {
+  fill: none;
+}
+.focus-dial .track {
+  stroke: rgba(255, 255, 255, 0.12);
+  stroke-width: 1.2;
+}
+.focus-dial .bar {
+  stroke: #fff;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+.focus-clock {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.focus-time {
+  font-size: clamp(54px, 17vw, 82px);
+  font-weight: 200;
+  letter-spacing: -0.04em;
+  line-height: 1;
+}
+.focus-sub {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.55);
+  letter-spacing: 0.02em;
+}
+.focus-foot {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  min-height: 176px;
+}
+.focus-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(14px);
+  transition:
+    opacity 0.45s var(--ease),
+    transform 0.6s var(--ease),
+    visibility 0.45s;
+}
+.focus.show[data-state='setup'] .focus-setup,
+.focus.show[data-state='running'] .focus-run,
+.focus.show[data-state='paused'] .focus-run,
+.focus.show[data-state='done'] .focus-done {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+}
+.focus-presets {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+}
+.focus-presets button {
+  flex: 1 1 0;
+  max-width: 54px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  line-height: 1;
+  color: #fff;
+  transition:
+    background-color 0.3s,
+    color 0.3s,
+    transform 0.35s var(--ease-spring);
+}
+.focus-presets button small {
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  opacity: 0.6;
+  margin-top: 3px;
+}
+.focus-presets button.on {
+  background: #fff;
+  color: #000;
+}
+.focus-presets button:active {
+  transform: scale(0.9);
+}
+.f-start {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  height: 56px;
+  padding: 0 34px 0 28px;
+  border-radius: 28px;
+  background: #fff;
+  color: #000;
+  font-size: 16px;
+  font-weight: 500;
+  box-shadow: 0 0 40px -6px rgba(255, 255, 255, 0.45);
+  transition: transform 0.4s var(--ease-spring);
+}
+.f-start svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+.f-start:active {
+  transform: scale(0.94);
+}
+.focus-hint {
+  margin: 0;
+  max-width: 300px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.45);
+}
+.focus-run {
+  flex-direction: row;
+  justify-content: center;
+  gap: 34px;
+  bottom: 40px;
+}
+.f-btn {
+  width: 58px;
+  height: 58px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 16px;
+  transition:
+    transform 0.35s var(--ease-spring),
+    background-color 0.25s;
+}
+.f-btn svg {
+  width: 18px;
+  height: 18px;
+}
+.f-btn:active {
+  transform: scale(0.88);
+  background: rgba(255, 255, 255, 0.1);
+}
+.f-main {
+  width: 86px;
+  height: 86px;
+  border-radius: 50%;
+  background: #fff;
+  color: #000;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 50px -8px rgba(255, 255, 255, 0.5);
+  transition: transform 0.4s var(--ease-spring);
+}
+.f-main svg {
+  width: 28px;
+  height: 28px;
+  stroke-width: 2.4;
+}
+.f-main:active {
+  transform: scale(0.9);
+}
+.focus[data-state='paused'] .f-main {
+  animation: breatheBtn 2.8s ease-in-out infinite;
+}
+@keyframes breatheBtn {
+  0%,
+  100% {
+    box-shadow: 0 0 30px -10px rgba(255, 255, 255, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 60px -4px rgba(255, 255, 255, 0.65);
+  }
+}
+.focus[data-state='paused'] .focus-time {
+  opacity: 0.55;
+  transition: opacity 0.4s;
+}
+.fd-title {
+  font-size: 24px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+}
+.fd-sub {
+  margin-top: -8px;
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.6);
+  max-width: 90%;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fd-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.f-pill {
+  height: 46px;
+  padding: 0 20px;
+  border-radius: 23px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: #fff;
+  font-size: 14.5px;
+  transition: transform 0.35s var(--ease-spring);
+}
+.f-pill.solid {
+  background: #fff;
+  color: #000;
+  border-color: #fff;
+  font-weight: 500;
+}
+.f-pill:active {
+  transform: scale(0.94);
+}
+.f-pill[hidden] {
+  display: none;
+}
+
+/* Live pill while a session runs in the background */
+.focus-live {
+  position: fixed;
+  top: calc(var(--safe-top) + 12px);
+  left: 50%;
+  z-index: 75;
+  height: 36px;
+  padding: 0 14px 0 12px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 13.5px;
+  box-shadow: var(--shadow-lg);
+  transform: translate(-50%, -160%);
+  transition: transform 0.6s var(--ease-spring);
+}
+.focus-live.show {
+  transform: translate(-50%, 0);
+}
+.focus-live .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: livePulse 2s ease-in-out infinite;
+}
+.focus-live.paused .dot {
+  animation: none;
+  opacity: 0.4;
+}
+.focus-live .l {
+  opacity: 0.6;
+}
+@keyframes livePulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.35;
+    transform: scale(0.7);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .focus,
+  .focus-panel {
+    transform: none !important;
+  }
+}
+
+/* Swipe actions: fade back after release, icon "arms" past the threshold */
+.item-actions-bg {
+  transition: opacity 0.3s var(--ease);
+}
+.item-wrap.dragging .item-actions-bg {
+  transition: none;
+}
+.item-actions-bg span {
+  transition: transform 0.35s var(--ease-spring);
+}
+.item-wrap.armed .item-actions-bg span {
+  transform: scale(1.12);
+}
+.bar-col .bar {
+  transition: height 0.6s var(--ease);
+}
+
+/* Containers that get re-rendered keep their children's margins inside, so
+   their height is stable while list animations hold and release it. */
+.view-inner,
+.page-inner {
+  display: flow-root;
 }

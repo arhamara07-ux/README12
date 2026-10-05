@@ -1,6 +1,6 @@
 // Notification engine. Checks due reminders on a timer and shows system
 // notifications through the service worker (with Done / Snooze actions),
-// plus in-app banners and a chime while the app is open.
+// plus in-app banners while the app is open.
 import { state, markFired, setMeta, getList } from './store.js';
 import { fmtTime, toDateInput, parseTimeStr, withTime, HOUR, MIN } from './dates.js';
 
@@ -57,6 +57,9 @@ async function show(title, opts) {
   }
 }
 
+/** A one-off notification (e.g. a finished focus session). */
+export const notify = (title, opts = {}) => show(title, { tag: 'remindly-misc', ...opts });
+
 export function notifyReminder(r, kind) {
   const list = getList(r.listId);
   const due = new Date(r.due);
@@ -73,15 +76,15 @@ export function notifyReminder(r, kind) {
       requireInteraction: r.priority >= 3,
       data: { id: r.id },
       actions: [
-        { action: 'done', title: '✓ Done' },
-        { action: 'snooze', title: '⏰ Snooze 10 min' },
+        { action: 'done', title: 'Done' },
+        { action: 'snooze', title: 'Snooze 10 min' },
       ],
     });
   onInApp({ type: 'reminder', reminder: r, kind });
 }
 
 export function testNotification() {
-  return show('Notifications are on 🎉', {
+  return show('Notifications are on', {
     body: "You'll get a heads-up like this whenever a reminder is due.",
     tag: 'remindly-test',
   });
@@ -128,7 +131,7 @@ function digest(now) {
     .slice(0, 4)
     .map((r) => '• ' + r.title)
     .join('\n');
-  show(`☀️ You have ${todays.length} reminder${todays.length > 1 ? 's' : ''} today`, {
+  show(`${todays.length} reminder${todays.length > 1 ? 's' : ''} today`, {
     body: (overdue ? `${overdue} overdue\n` : '') + titles,
     tag: 'remindly-digest',
     data: { view: 'today' },
@@ -174,26 +177,4 @@ export function start(inAppHandler) {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') check();
   });
-}
-
-/* ---------- Chime (WebAudio, no assets needed) ---------- */
-let audioCtx;
-export function chime() {
-  if (!state.settings.sound) return;
-  try {
-    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
-    const t = audioCtx.currentTime;
-    [880, 1318.5].forEach((f, i) => {
-      const o = audioCtx.createOscillator();
-      const g = audioCtx.createGain();
-      o.type = 'sine';
-      o.frequency.value = f;
-      g.gain.setValueAtTime(0.0001, t + i * 0.14);
-      g.gain.exponentialRampToValueAtTime(0.18, t + i * 0.14 + 0.02);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.14 + 0.5);
-      o.connect(g).connect(audioCtx.destination);
-      o.start(t + i * 0.14);
-      o.stop(t + i * 0.14 + 0.55);
-    });
-  } catch {}
 }
