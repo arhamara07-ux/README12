@@ -1,8 +1,10 @@
 import * as S from './store.js';
-import { state, getList, getReminder, sortReminders, LIST_COLORS, LIST_ICONS, PRIORITIES } from './store.js';
+import { state, getList, getReminder, sortReminders, PRIORITIES } from './store.js';
 import * as D from './dates.js';
 import { parseQuick, QUICK_HINTS } from './parse.js';
 import * as N from './notify.js';
+import { mountArt, orb, glyphFor, GLYPH_NAMES } from './art.js';
+import { sfx } from './sfx.js';
 
 /* =========================================================
    Helpers
@@ -47,8 +49,16 @@ function applyTheme() {
   const t = state.settings.theme;
   const dark = t === 'dark' || (t === 'auto' && darkMQ.matches);
   document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-  document.documentElement.style.setProperty('--accent', state.settings.accent);
-  $('meta[name="theme-color"]').setAttribute('content', dark ? '#0b0b0f' : '#f4f4f8');
+  const a = state.settings.accent;
+  const root = document.documentElement.style;
+  if (!a || a === 'mono') {
+    root.removeProperty('--accent');
+    root.removeProperty('--accent-ink');
+  } else {
+    root.setProperty('--accent', a);
+    root.setProperty('--accent-ink', '#fff');
+  }
+  $('meta[name="theme-color"]').setAttribute('content', dark ? '#000000' : '#f4f4f2');
 }
 darkMQ.addEventListener?.('change', applyTheme);
 
@@ -100,7 +110,7 @@ function renderItem(r, opts = {}) {
   if (isSnoozed(r) && !r.done) parts.push(`<span class="snoozed">${icon('alarm')}Snoozed · ${D.fmtTime(new Date(r.snoozedUntil), h24())}</span>`);
   if (isRepeating(r)) parts.push(`<span>${icon('repeat')}${esc(D.repeatLabel(r.repeat))}</span>`);
   if (r.alertBefore > 0 && !r.done) parts.push(`<span>${icon('bell')}${alertLabel(r.alertBefore, true)}</span>`);
-  if (!opts.hideList) parts.push(`<span><i class="list-dot" style="--c:${list.color}"></i>${esc(list.name)}</span>`);
+  if (!opts.hideList) parts.push(`<span>${orb(glyphFor(list), 14)}${esc(list.name)}</span>`);
   r.tags.forEach((t) => parts.push(`<span class="tag">#${esc(t)}</span>`));
   if (r.subtasks.length) parts.push(`<span>${icon('subtasks')}${r.subtasks.filter((s) => s.done).length}/${r.subtasks.length}</span>`);
   if (r.url) parts.push(`<span>${icon('link')}</span>`);
@@ -108,10 +118,7 @@ function renderItem(r, opts = {}) {
   const prio = PRIORITIES[r.priority] || PRIORITIES[0];
   const subPct = r.subtasks.length ? Math.round((r.subtasks.filter((s) => s.done).length / r.subtasks.length) * 100) : 0;
   const key = ghost ? `g:${r.id}:${ghost.getTime()}` : `r:${r.id}`;
-  const side = [
-    r.pinned ? icon('pin', 'pinned') : '',
-    r.priority ? `<span style="color:${prio.color};font-weight:800;font-size:13px">${'!'.repeat(r.priority)}</span>` : '',
-  ].join('');
+  const side = [r.pinned ? icon('pin', 'pinned') : '', r.priority ? `<span title="${prio.label} priority">${'!'.repeat(r.priority)}</span>` : ''].join('');
 
   return `
   <div class="item-wrap" data-flip="${key}" ${ghost ? '' : `data-id="${r.id}"`}>
@@ -121,7 +128,7 @@ function renderItem(r, opts = {}) {
         : `<div class="item-actions-bg right"><span>${icon('check')}${isRepeating(r) ? 'Done · next' : 'Complete'}</span></div>
     <div class="item-actions-bg left"><span>Delete${icon('trash')}</span></div>`
     }
-    <div class="item ${r.done ? 'done' : ''} ${ghost ? 'ghost' : ''}" data-open="${r.id}" style="--list-color:${list.color};${r.priority ? `--prio:${prio.color}` : ''}${ghost ? ';opacity:.55' : ''}">
+    <div class="item ${r.done ? 'done' : ''} ${ghost ? 'ghost' : ''}" data-open="${r.id}" style="--prio-o:${[0, 0.3, 0.6, 1][r.priority] || 0}${ghost ? ';opacity:.5' : ''}">
       <button class="check ${r.done ? 'on' : ''}" ${ghost ? 'disabled tabindex="-1"' : `data-toggle="${r.id}"`} aria-label="${r.done ? 'Mark as not done' : 'Complete'}">${icon('check')}</button>
       <div class="item-main">
         <div class="item-title">${esc(r.title) || '<span style="color:var(--muted)">Untitled</span>'}</div>
@@ -148,12 +155,30 @@ function alertLabel(min, short) {
 /* =========================================================
    Views
    ========================================================= */
-function ring(done, total) {
-  const pct = total ? done / total : 0;
-  const c = 2 * Math.PI * 27;
-  return `<div class="ring" title="${done} of ${total} done today">
-    <svg viewBox="0 0 64 64"><circle class="track" cx="32" cy="32" r="27"/><circle class="bar" cx="32" cy="32" r="27" stroke-dasharray="${c}" stroke-dashoffset="${c * (1 - pct)}" stroke-linecap="round"/></svg>
-    <div class="ring-label">${total ? Math.round(pct * 100) + '%' : '✓'}</div></div>`;
+function phase(n) {
+  const h = n.getHours();
+  if (h < 5) return { name: 'Night Calm', icon: 'moon' };
+  if (h < 9) return { name: 'Morning Rise', icon: 'arrow-ne' };
+  if (h < 12) return { name: 'Clear Focus', icon: 'arrow-ne' };
+  if (h < 17) return { name: 'Afternoon Flow', icon: 'arrow-ne' };
+  if (h < 21) return { name: 'Evening Wind-down', icon: 'moon' };
+  return { name: 'Night Calm', icon: 'moon' };
+}
+
+const STARTERS = [
+  ['drop', 'Drink water', 'Drink water in 1 hour'],
+  ['pill', 'Medicine', 'Take my medicine every day at 9am'],
+  ['bolt', 'Workout', 'Workout tomorrow at 7am'],
+  ['phone', 'Call someone', 'Call mom tonight'],
+  ['card', 'Pay a bill', 'Pay rent every month on the 1st'],
+  ['leaf', 'Meditate', 'Meditate every day at 8pm'],
+  ['book', 'Read', 'Read 20 pages tonight'],
+  ['moon', 'Sleep', 'Go to bed at 11pm'],
+];
+
+function artCard(art, seed, title, label, attrs) {
+  return `<button class="art-card" ${attrs}><canvas data-art="${art}" data-seed="${seed}"></canvas>
+    <div class="art-text"><h3>${esc(title)}</h3><span class="art-label">${esc(label)}</span></div></button>`;
 }
 
 function notificationNotice() {
@@ -171,25 +196,41 @@ const RENDER = {
   today() {
     const n = now();
     const b = todayBuckets();
+    const st = S.stats();
+    const ph = phase(n);
     const total = b.completedCount + b.today.length + b.overdue.length;
-    const name = state.settings.name ? `, ${esc(state.settings.name.split(' ')[0])}` : '';
-    let html = `<div class="hero"><div class="hero-row"><div>
-        <div class="hero-eyebrow">${D.WEEKDAYS[n.getDay()]}, ${D.MONTHS[n.getMonth()]} ${n.getDate()}</div>
-        <h2>${D.greeting(n)}${name}</h2>
-      </div>${ring(b.completedCount, total)}</div></div>`;
+    const left = b.today.length + b.overdue.length;
+    const next = open()
+      .filter((r) => r.due && new Date(r.due) >= n)
+      .sort((a, c) => new Date(a.due) - new Date(c.due))[0];
+    const week = open().filter((r) => r.due && new Date(r.due) <= D.endOfDay(D.addDays(n, 6))).length;
+    const first = state.settings.name ? state.settings.name.split(' ')[0] : '';
+
+    let html = `<div class="phase-row">
+        <div class="phase-icon">${icon(ph.icon)}</div>
+        <div class="phase-text"><b>${ph.name}</b><small>${D.WEEKDAYS[n.getDay()]}, ${D.MONTHS[n.getMonth()]} ${n.getDate()}${first ? ` · Hi, ${esc(first)}` : ''}</small></div>
+      </div>`;
+    html += `<div class="carousel">
+      ${
+        next
+          ? artCard('beams', 1, next.title, `Next · ${D.fmtDue(next.due, h24())}`, `data-open="${next.id}"`)
+          : artCard('beams', 1, 'Clear Horizon', 'Nothing scheduled', 'data-action="compose"')
+      }
+      ${artCard('waves', 2, left ? `${left} left today` : 'Day in Flow', total ? `${Math.round((b.completedCount / total) * 100)}% complete today` : 'Nothing due today', 'data-smart="today"')}
+      ${artCard('rings', 3, st.streak ? `${st.streak}-day streak` : 'Begin a Streak', `${st.weekTotal} done this week`, 'data-go="me"')}
+      ${artCard('orbit', 4, week ? `${week} this week` : 'Open Week', "See what's ahead", 'data-go="upcoming"')}
+    </div>
+    <div class="carousel-dots"><i class="on"></i><i></i><i></i><i></i></div>`;
+    html += `<button class="focus-pill" data-action="compose"><span>What should I remind you of?</span><span class="plus">${icon('plus')}</span></button>`;
+    html += `<div class="starters">${STARTERS.map(([ic, label, text]) => `<button class="starter" data-starter="${esc(text)}">${icon(ic)}${label}</button>`).join('')}</div>`;
     html += notificationNotice();
-    html += `<div class="pills">
-      <button class="pill ${b.overdue.length ? 'danger' : ''}" data-smart="overdue"><b>${b.overdue.length}</b><small>Overdue</small></button>
-      <button class="pill accent" data-smart="today"><b>${b.today.length}</b><small>Due today</small></button>
-      <button class="pill" data-smart="completed"><b>${b.completedCount}</b><small>Done today</small></button>
-    </div>`;
     if (b.overdue.length) html += sectionTitle('Overdue', b.overdue.length, '', 'danger') + items(b.overdue);
     if (b.pinned.length) html += sectionTitle('Pinned', b.pinned.length) + items(b.pinned);
     if (b.today.length) html += sectionTitle('Today', b.today.length) + items(b.today, { timeOnly: true });
     if (!b.overdue.length && !b.today.length) {
       html += b.completedCount
-        ? empty('🎉', 'All done for today!', `You completed ${plural(b.completedCount, 'reminder')} today. Enjoy the rest of your day.`)
-        : empty('☀️', 'Nothing due today', 'Tap + to add a reminder. Try typing “Water plants tomorrow at 9am”.');
+        ? empty(orb('spark', 64), 'All done for today', `You completed ${plural(b.completedCount, 'reminder')} today. Enjoy the quiet.`)
+        : empty(orb('sun', 64), 'Nothing due today', 'Tap a suggestion above, or type something like “Water plants tomorrow at 9am”.');
     }
     if (b.anytime.length) html += sectionTitle('Anytime', b.anytime.length) + items(b.anytime);
     if (b.doneToday.length) {
@@ -266,24 +307,23 @@ const RENDER = {
       ['completed', 'Completed', 'check', '#2fb36d', state.reminders.filter((r) => r.done).length],
     ];
     let html = `<div class="hero"><div class="hero-eyebrow">Organize</div><h2>Lists</h2></div>`;
+    html += `<div class="orb-row">${state.lists
+      .map((l) => {
+        const openN = state.reminders.filter((r) => r.listId === l.id && !r.done).length;
+        return `<button class="orb-tile" data-list="${l.id}" data-flip="l:${l.id}">
+          <span class="orb-wrap">${orb(glyphFor(l), 74)}${openN ? `<span class="badge">${openN}</span>` : ''}</span>
+          <span class="lbl">${esc(l.name)}</span></button>`;
+      })
+      .join('')}
+      <button class="orb-tile add" data-action="new-list"><span class="orb-wrap"><span class="orb" style="--s:74px">${icon('plus')}</span></span><span class="lbl">New list</span></button>
+    </div>`;
+    html += sectionTitle('Smart lists');
     html += `<div class="smart-grid">${smart
       .map(
         ([k, label, ic, c, count]) =>
           `<button class="smart" data-smart="${k}" style="--c:${c}"><span class="ico">${icon(ic)}</span><b>${count}</b><span>${label}</span></button>`,
       )
       .join('')}</div>`;
-    html += sectionTitle('My lists', state.lists.length);
-    html += `<div class="list-rows">${state.lists
-      .map((l) => {
-        const all = state.reminders.filter((r) => r.listId === l.id);
-        const openN = all.filter((r) => !r.done).length;
-        const pct = all.length ? ((all.length - openN) / all.length) * 100 : 0;
-        return `<button class="list-row" data-list="${l.id}" style="--c:${l.color}" data-flip="l:${l.id}">
-          <span class="emoji">${esc(l.icon)}</span><span class="name">${esc(l.name)}</span>
-          <span class="list-progress"><i style="width:${pct}%"></i></span><span class="n">${openN}</span>${icon('chev-right')}</button>`;
-      })
-      .join('')}</div>`;
-    html += `<button class="add-list-btn" data-action="new-list">${icon('plus')}New list</button>`;
     const tags = new Map();
     o.forEach((r) => r.tags.forEach((t) => tags.set(t, (tags.get(t) || 0) + 1)));
     if (tags.size) {
@@ -350,8 +390,9 @@ const RENDER = {
       <div class="row"><span class="ri" style="--c:#ffa94d">${icon('alarm')}</span><span class="rl">Default early alert</span><select data-setting="defaultAlert">${alertOpts}</select></div>
       <div class="row"><span class="ri" style="--c:#fab005">${icon('sun')}</span><span class="rl">Morning summary<small>A daily overview of what's due</small></span>${sw('digest', s.digest)}</div>
       <div class="row"><span class="ri" style="--c:#fab005">${icon('clock')}</span><span class="rl">Summary time</span><input type="time" data-setting="digestTime" value="${s.digestTime}"></div>
-      <div class="row"><span class="ri" style="--c:#20c997">♪</span><span class="rl">In-app sound</span>${sw('sound', s.sound)}</div>
-      <div class="row"><span class="ri" style="--c:#845ef7">〰</span><span class="rl">Vibration</span>${sw('haptics', s.haptics)}</div>
+      <div class="row"><span class="ri">♪</span><span class="rl">Alert chime<small>Plays when a reminder is due</small></span>${sw('sound', s.sound)}</div>
+      <div class="row"><span class="ri">◌</span><span class="rl">Interface sounds<small>Soft tones as you tap and swipe</small></span>${sw('uiSounds', s.uiSounds !== false)}</div>
+      <div class="row"><span class="ri">〰</span><span class="rl">Vibration</span>${sw('haptics', s.haptics)}</div>
     </div>
 
     <div class="section-title">Appearance</div>
@@ -359,8 +400,11 @@ const RENDER = {
       <div class="row"><span class="rl">Theme</span>
         <div class="segmented" data-seg="theme">${['auto', 'light', 'dark'].map((t) => `<button class="${s.theme === t ? 'on' : ''}" data-val="${t}">${t[0].toUpperCase() + t.slice(1)}</button>`).join('')}</div></div>
       <div class="row" style="padding-bottom:0"><span class="rl">Accent color</span></div>
-      <div class="swatches">${['#5b5bf6', '#0a84ff', '#20c997', '#2fb36d', '#f59f00', '#ff6b6b', '#f06595', '#cc5de8', '#495057']
-        .map((c) => `<button class="swatch ${s.accent === c ? 'on' : ''}" style="--c:${c}" data-accent="${c}" aria-label="Accent ${c}"></button>`)
+      <div class="swatches">${['mono', '#8e8cff', '#5ac8fa', '#63e6be', '#ffd43b', '#ff8787', '#f783ac', '#d0bfff']
+        .map(
+          (c) =>
+            `<button class="swatch ${c === 'mono' ? 'mono' : ''} ${(s.accent || 'mono') === c ? 'on' : ''}" style="--c:${c}" data-accent="${c}" aria-label="${c === 'mono' ? 'Monochrome' : 'Accent ' + c}"></button>`,
+        )
         .join('')}</div>
       <div class="row"><span class="rl">24-hour time</span>${sw('h24', s.h24)}</div>
     </div>
@@ -434,7 +478,7 @@ function calDay() {
   entries.sort((a, b) => a.r.done - b.r.done || a.d - b.d);
   const label = D.relDay(d);
   return `${sectionTitle(label === D.fmtDate(d) ? label : `${label} · ${D.MONTHS_SHORT[d.getMonth()]} ${d.getDate()}`, entries.length, `<button class="link" data-add-day="${D.dateKey(d)}">+ Add</button>`)}
-    ${entries.length ? `<div class="items">${entries.map((e) => renderItem(e.r, { ghostDate: e.ghost ? e.d : null, timeOnly: true, compact: true })).join('')}</div>` : empty('🗓️', 'Free day', 'No reminders on this day.')}`;
+    ${entries.length ? `<div class="items">${entries.map((e) => renderItem(e.r, { ghostDate: e.ghost ? e.d : null, timeOnly: true, compact: true })).join('')}</div>` : empty(orb('moon', 64), 'Free day', 'No reminders on this day.')}`;
 }
 
 function shiftMonth(delta) {
@@ -534,9 +578,14 @@ function stagger(root) {
 function renderView(name, { animate = false, enter = false } = {}) {
   const el = viewEl(name);
   const html = `<div class="view-inner">${RENDER[name]()}</div>`;
+  // Keep horizontal scrollers (art carousel, chips) where the user left them.
+  const keep = $$('.carousel, .starters, .orb-row', el).map((x) => x.scrollLeft);
   if (animate) flip(el, () => (el.innerHTML = html));
   else el.innerHTML = html;
+  $$('.carousel, .starters, .orb-row', el).forEach((x, i) => keep[i] && (x.scrollLeft = keep[i]));
   if (enter) stagger(el.firstElementChild);
+  mountArt(el);
+  updateDots(el);
   dirty.delete(name);
 }
 
@@ -558,13 +607,36 @@ function updateBadges() {
 /* =========================================================
    Tabs & transitions
    ========================================================= */
+/** Slide the tab pill under a tab; `to` + `p` interpolate mid-swipe. */
+function placeIndicator(name, to = null, p = 0) {
+  const a = $(`.tab[data-tab="${name}"]`);
+  const b = to ? $(`.tab[data-tab="${to}"]`) : a;
+  const x = a.offsetLeft + (b.offsetLeft - a.offsetLeft) * p;
+  const w = a.offsetWidth + (b.offsetWidth - a.offsetWidth) * p;
+  const ind = $('#tabIndicator');
+  ind.style.transform = `translateX(${x}px)`;
+  ind.style.width = `${w}px`;
+}
+addEventListener('resize', () => placeIndicator(ui.tab));
+document.fonts?.ready.then(() => placeIndicator(ui.tab));
+
+/** Carousel page dots */
+function updateDots(root) {
+  const c = $('.carousel', root);
+  const dots = $$('.carousel-dots i', root);
+  if (!c || !dots.length) return;
+  const card = c.firstElementChild;
+  const i = Math.round(c.scrollLeft / ((card?.offsetWidth || 1) + 12));
+  dots.forEach((d, k) => d.classList.toggle('on', k === Math.min(i, dots.length - 1)));
+}
+
 function syncChrome(name) {
   $$('.tab').forEach((t) => {
     const on = t.dataset.tab === name;
     t.classList.toggle('active', on);
     t.setAttribute('aria-selected', on);
   });
-  $('#tabIndicator').style.transform = `translateX(${TABS.indexOf(name) * 100}%)`;
+  placeIndicator(name);
   $('#topTitle').textContent = TITLES[name];
   topbar.classList.toggle('scrolled', viewEl(name).scrollTop > 40);
   fab.classList.toggle('hidden', name === 'me');
@@ -587,6 +659,7 @@ function setTab(name, { instant = false } = {}) {
     return;
   }
   haptic(6);
+  sfx.tab(TABS.indexOf(name));
   ui.tab = name;
   const wasDirty = dirty.has(name);
   if (wasDirty) renderView(name, { enter: !instant });
@@ -675,7 +748,7 @@ window.addEventListener(
     if (s.next) s.next.style.transform = `translateX(${tx + s.dir * s.w}px)`;
     // indicator follows the finger
     const p = Math.abs(tx) / s.w;
-    $('#tabIndicator').style.transform = `translateX(${(TABS.indexOf(ui.tab) + (s.next ? s.dir * p : 0)) * 100}%)`;
+    placeIndicator(ui.tab, s.nextName, s.next ? p : 0);
   });
   const end = (e) => {
     if (!s || e.pointerId !== s.id) return;
@@ -699,6 +772,7 @@ window.addEventListener(
       ui.tab = target;
       syncChrome(target);
       haptic(6);
+      sfx.tab(TABS.indexOf(target));
       a1.onfinish = () => settleViews(ui.tab);
     } else {
       st.cur.animate([{ transform: `translateX(${st.tx}px)` }, { transform: 'none' }], { duration: dur, easing: EASE });
@@ -725,6 +799,11 @@ viewsEl.addEventListener(
   'scroll',
   (e) => {
     if (e.target.dataset?.view === ui.tab) topbar.classList.toggle('scrolled', e.target.scrollTop > 40);
+    else if (e.target.classList?.contains('carousel')) {
+      const before = $('.carousel-dots i.on', e.target.parentElement);
+      updateDots(e.target.parentElement);
+      if (before && before !== $('.carousel-dots i.on', e.target.parentElement)) sfx.tap();
+    }
   },
   true,
 );
@@ -757,29 +836,27 @@ window.addEventListener('popstate', () => {
    Sub-pages (list detail, smart lists, search)
    ========================================================= */
 const SMART = {
-  today: { title: 'Today', ico: '☀️', filter: (r) => !r.done && r.due && new Date(r.due) <= D.endOfDay(now()) },
-  overdue: { title: 'Overdue', ico: '⏰', filter: (r) => !r.done && r.due && new Date(r.due) < D.startOfDay(now()) },
-  scheduled: { title: 'Scheduled', ico: '🗓️', filter: (r) => !r.done && r.due },
-  all: { title: 'All reminders', ico: '📥', filter: (r) => !r.done },
-  priority: { title: 'Priority', ico: '🚩', filter: (r) => !r.done && r.priority >= 2 },
-  pinned: { title: 'Pinned', ico: '📌', filter: (r) => !r.done && r.pinned },
-  completed: { title: 'Completed', ico: '✅', filter: (r) => r.done, sort: (a, b) => (b.doneAt || 0) - (a.doneAt || 0) },
+  today: { title: 'Today', ico: 'sun', filter: (r) => !r.done && r.due && new Date(r.due) <= D.endOfDay(now()) },
+  overdue: { title: 'Overdue', ico: 'bolt', filter: (r) => !r.done && r.due && new Date(r.due) < D.startOfDay(now()) },
+  scheduled: { title: 'Scheduled', ico: 'grid', filter: (r) => !r.done && r.due },
+  all: { title: 'All reminders', ico: 'cube', filter: (r) => !r.done },
+  priority: { title: 'Priority', ico: 'peaks', filter: (r) => !r.done && r.priority >= 2 },
+  pinned: { title: 'Pinned', ico: 'spark', filter: (r) => !r.done && r.pinned },
+  completed: { title: 'Completed', ico: 'rings', filter: (r) => r.done, sort: (a, b) => (b.doneAt || 0) - (a.doneAt || 0) },
 };
 
 function pageContent() {
   const p = ui.page;
   if (p.type === 'search') return searchPage();
   let title;
-  let emoji;
-  let color = 'var(--accent)';
+  let glyph;
   let rs;
   let doneRs = [];
   let hideList = false;
   if (p.type === 'list') {
     const l = getList(p.id);
     title = l.name;
-    emoji = l.icon;
-    color = l.color;
+    glyph = glyphFor(l);
     hideList = true;
     const all = state.reminders.filter((r) => r.listId === l.id);
     rs = all.filter((r) => !r.done).sort(sortReminders);
@@ -787,7 +864,7 @@ function pageContent() {
   } else {
     const sm = SMART[p.key];
     title = sm.title;
-    emoji = sm.ico;
+    glyph = sm.ico;
     rs = state.reminders.filter(sm.filter).sort(sm.sort || sortReminders);
   }
   const head = `<div class="page-head"><div class="page-head-inner">
@@ -795,15 +872,15 @@ function pageContent() {
       <div class="title">${esc(title)}</div>
       ${p.type === 'list' ? `<button class="icon-btn" data-action="edit-list" data-id="${p.id}" aria-label="Edit list">${icon('more')}</button>` : p.key === 'completed' && rs.length ? `<button class="icon-btn" data-action="clear-completed" aria-label="Clear completed">${icon('trash')}</button>` : '<span style="width:40px"></span>'}
     </div></div>`;
-  let body = `<div class="hero" style="padding-top:4px"><div class="hero-row"><div>
-      <h2 style="color:${color}">${esc(emoji)} ${esc(title)}</h2>
-      <div class="hero-sub">${p.key === 'completed' ? plural(rs.length, 'completed reminder') : `${plural(rs.length, 'open reminder')}`}</div></div></div></div>`;
+  let body = `<div class="hero" style="padding-top:4px"><div class="page-hero">${orb(glyph, 60)}<div>
+      <h2>${esc(title)}</h2>
+      <div class="hero-sub" style="margin-top:4px">${p.key === 'completed' ? plural(rs.length, 'completed reminder') : `${plural(rs.length, 'open reminder')}`}</div></div></div></div>`;
   if (p.type === 'list' || ['today', 'all', 'scheduled'].includes(p.key))
     body += `<button class="add-list-btn" style="margin:0 0 12px" data-action="add-here">${icon('plus')}New reminder</button>`;
   body += rs.length
     ? items(rs, { hideList })
     : empty(
-        p.key === 'completed' ? '🌱' : '✨',
+        orb(p.key === 'completed' ? 'leaf' : 'spark', 64),
         p.key === 'completed' ? 'Nothing completed yet' : 'All clear',
         p.key === 'completed' ? 'Completed reminders will show up here.' : 'Nothing here right now.',
       );
@@ -828,13 +905,7 @@ function searchPage() {
     return [r.title, r.notes, r.tags.join(' '), getList(r.listId).name, r.subtasks.map((s) => s.title).join(' ')].join(' ').toLowerCase().includes(q);
   });
   rs.sort(sortReminders);
-  const filters = [
-    ['open', 'Open'],
-    ['all', 'All'],
-    ['done', 'Completed'],
-    ['high', 'Priority'],
-    ...state.lists.map((l) => [`list:${l.id}`, `${l.icon} ${l.name}`]),
-  ];
+  const filters = [['open', 'Open'], ['all', 'All'], ['done', 'Completed'], ['high', 'Priority'], ...state.lists.map((l) => [`list:${l.id}`, l.name])];
   const head = `<div class="page-head"><div class="page-head-inner">
       <button class="back-btn" data-action="back" aria-label="Back">${icon('chev-left')}</button>
       <label class="search-input">${icon('search')}<input id="searchInput" type="search" placeholder="Search reminders, notes, #tags" value="${esc(p.q || '')}" enterkeyhint="search"></label>
@@ -845,7 +916,7 @@ function searchPage() {
 }
 
 function searchResults(rs, q) {
-  if (!rs.length) return empty('🔍', q ? 'No matches' : 'Nothing here', q ? `Nothing found for “${esc(q)}”.` : 'Try a different filter.');
+  if (!rs.length) return empty(orb('rings', 64), q ? 'No matches' : 'Nothing here', q ? `Nothing found for “${esc(q)}”.` : 'Try a different filter.');
   return sectionTitle('Results', rs.length) + items(rs);
 }
 
@@ -881,6 +952,7 @@ function openPage(p) {
   renderPage({ enter: true });
   if (wasOpen) return;
   pushOverlay('page');
+  sfx.open();
   pageAnims.forEach((a) => a.cancel());
   pageEl.classList.add('open');
   pageEl.setAttribute('aria-hidden', 'false');
@@ -905,6 +977,7 @@ function openPage(p) {
 function closePage(fromPop = false, fromX = 0) {
   if (!ui.page) return;
   if (!fromPop) dropOverlay('page');
+  sfx.close();
   ui.page = null;
   const w = pageEl.clientWidth || innerWidth;
   const finish = () => {
@@ -1022,6 +1095,7 @@ function openSheet(mount, { onClose } = {}) {
   }
   sheetOpen = true;
   pushOverlay('sheet');
+  sfx.open();
   sheet.classList.add('show');
   sheetBackdrop.classList.add('show');
   sheetAnim?.cancel();
@@ -1032,12 +1106,14 @@ function openSheet(mount, { onClose } = {}) {
 function closeSheet(fromPop = false, fromY = 0) {
   if (!sheetOpen) return;
   if (!fromPop) dropOverlay('sheet');
+  sfx.close();
   sheetOpen = false;
   document.activeElement?.blur?.();
   sheetBackdrop.classList.remove('show');
   const cb = sheetOnClose;
   sheetOnClose = null;
   const done = () => {
+    sheet.getAnimations().forEach((x) => x.cancel());
     sheet.classList.remove('show');
     sheet.style.transform = '';
     sheetBody.innerHTML = '';
@@ -1150,7 +1226,7 @@ function showBanner(r, kind) {
     return;
   }
   const list = getList(r.listId);
-  banner.innerHTML = `<div class="b-ico">${esc(list.icon)}</div>
+  banner.innerHTML = `<div class="b-ico">${orb(glyphFor(list), 42)}</div>
     <div class="b-main"><b></b><small>${kind === 'pre' ? 'Coming up at ' : 'Due '}${D.fmtTime(new Date(r.due), h24())}</small></div>
     <div class="b-act"><button data-b="snooze">Snooze</button><button class="primary" data-b="done">Done</button></div>`;
   $('b', banner).textContent = r.title;
@@ -1219,10 +1295,12 @@ async function completeWithFeedback(id, wrap) {
   const r = getReminder(id);
   if (!r) return;
   if (r.done) {
+    sfx.toggle(false);
     S.uncompleteReminder(id);
     return;
   }
   haptic(12);
+  sfx.complete();
   $$(`[data-toggle="${id}"]`).forEach((c) => c.classList.add('on'));
   const rolling = isRepeating(r) && r.due;
   if (!rolling) await collapse(wrap || $(`.view.active .item-wrap[data-id="${id}"], #page .item-wrap[data-id="${id}"]`));
@@ -1240,6 +1318,7 @@ async function deleteWithFeedback(id, wrap, dir = -1) {
   const r = getReminder(id);
   if (!r) return;
   haptic(16);
+  sfx.remove();
   await collapse(wrap || $(`.view.active .item-wrap[data-id="${id}"], #page .item-wrap[data-id="${id}"]`), dir);
   S.deleteReminder(id);
   undoToast('Reminder deleted');
@@ -1457,7 +1536,7 @@ function openEditor(existing, preset = {}) {
       </div>
       <div class="field-card">
         <div class="field"><span class="ri" style="--c:var(--accent)">${icon('list')}</span><span class="fl">List</span></div>
-        <div class="list-picker">${state.lists.map((l) => `<button type="button" data-lid="${l.id}" style="--c:${l.color}">${esc(l.icon)} ${esc(l.name)}</button>`).join('')}</div>
+        <div class="list-picker">${state.lists.map((l) => `<button type="button" data-lid="${l.id}">${orb(glyphFor(l), 26)}${esc(l.name)}</button>`).join('')}</div>
         <div class="field"><span class="ri" style="--c:#ffa94d">${icon('flag')}</span><span class="fl">Priority</span>
           <div class="prio-picker">${PRIORITIES.map((p) => `<button type="button" data-prio="${p.v}" style="--pc:${p.v ? p.color : 'var(--text-2)'}">${p.v ? p.label : 'None'}</button>`).join('')}</div></div>
         <div class="field"><span class="ri" style="--c:#cc5de8">${icon('pin')}</span><span class="fl">Pin to top</span><label class="switch"><input type="checkbox" id="edPin"><span></span></label></div>
@@ -1629,6 +1708,7 @@ function openEditor(existing, preset = {}) {
       if (draft.repeat.type === 'custom' && !(draft.repeat.days || []).length) draft.repeat = { type: 'none', interval: 1 };
       if (draft.url && !/^https?:\/\//i.test(draft.url)) draft.url = 'https://' + draft.url;
       if (isNew) {
+        sfx.add();
         S.addReminder(draft);
         toast(draft.due ? `Reminder set for ${D.fmtDue(draft.due, h24())}` : 'Reminder added');
       } else {
@@ -1695,29 +1775,26 @@ function openEditor(existing, preset = {}) {
    ========================================================= */
 function openListEditor(existing) {
   const isNew = !existing;
-  const draft = existing ? { ...existing } : { name: '', color: LIST_COLORS[Math.floor(Math.random() * LIST_COLORS.length)], icon: '📌' };
+  const draft = existing ? { ...existing, glyph: glyphFor(existing) } : { name: '', glyph: GLYPH_NAMES[Math.floor(Math.random() * GLYPH_NAMES.length)] };
   openSheet((root) => {
     root.innerHTML = `<div class="sheet-top"><button class="text-btn" data-x="cancel">Cancel</button><h3>${isNew ? 'New list' : 'Edit list'}</h3><button class="text-btn strong" data-x="save">Done</button></div>
       <div class="field-card">
-        <div class="list-preview" style="--c:${draft.color}"><div class="big">${esc(draft.icon)}</div><input id="lsName" placeholder="List name" maxlength="40"></div>
-        <div class="swatches" style="justify-content:center">${LIST_COLORS.map((c) => `<button type="button" class="swatch" style="--c:${c}" data-color="${c}" aria-label="Color ${c}"></button>`).join('')}</div>
+        <div class="list-preview"><div class="big"></div><input id="lsName" placeholder="List name" maxlength="40"></div>
       </div>
-      <div class="field-card"><div class="emoji-grid">${LIST_ICONS.map((ic) => `<button type="button" data-icon="${ic}">${ic}</button>`).join('')}</div></div>
+      <div class="field-card"><div class="glyph-grid">${GLYPH_NAMES.map((g) => `<button type="button" data-glyph="${g}" aria-label="${g}">${orb(g, 50)}</button>`).join('')}</div></div>
       ${isNew ? '' : `<button class="btn danger block" data-x="del">${icon('trash')}Delete list</button>`}`;
     const name = $('#lsName', root);
     name.value = draft.name;
     const sync = () => {
-      $('.list-preview', root).style.setProperty('--c', draft.color);
-      $('.big', root).textContent = draft.icon;
-      $$('[data-color]', root).forEach((b) => b.classList.toggle('on', b.dataset.color === draft.color));
-      $$('[data-icon]', root).forEach((b) => b.classList.toggle('on', b.dataset.icon === draft.icon));
+      $('.big', root).innerHTML = orb(draft.glyph, 96);
+      $$('[data-glyph]', root).forEach((b) => b.classList.toggle('on', b.dataset.glyph === draft.glyph));
       $('[data-x="save"]', root).disabled = !draft.name.trim();
     };
     sync();
     if (isNew) setTimeout(() => name.focus(), 350);
     name.addEventListener('input', () => {
       draft.name = name.value;
-      sync();
+      $('[data-x="save"]', root).disabled = !draft.name.trim();
     });
     name.addEventListener('keydown', (e) => e.key === 'Enter' && $('[data-x="save"]', root).click());
     root.addEventListener('click', (e) => {
@@ -1727,6 +1804,7 @@ function openListEditor(existing) {
       if (b.dataset.x === 'save') {
         if (!draft.name.trim()) return;
         S.saveList({ ...draft, name: draft.name.trim() });
+        sfx.add();
         closeSheet();
         return;
       }
@@ -1738,12 +1816,17 @@ function openListEditor(existing) {
         undoToast(n ? `List deleted · ${plural(n, 'reminder')} moved to ${state.lists[0].name}` : 'List deleted');
         return;
       }
-      if (b.dataset.color) draft.color = b.dataset.color;
-      if (b.dataset.icon) {
-        draft.icon = b.dataset.icon;
-        $('.big', root).animate([{ transform: 'scale(.6) rotate(-10deg)' }, { transform: 'none' }], { duration: 420, easing: SPRING });
+      if (b.dataset.glyph) {
+        draft.glyph = b.dataset.glyph;
+        sync();
+        $('.big .orb', root).animate(
+          [
+            { transform: 'scale(.7) rotate(-20deg)', opacity: 0.4 },
+            { transform: 'none', opacity: 1 },
+          ],
+          { duration: 520, easing: SPRING },
+        );
       }
-      sync();
     });
   });
 }
@@ -1759,13 +1842,15 @@ let composerOpen = false;
 
 function openComposer(ctx = {}) {
   composerCtx = ctx;
-  cInput.value = '';
+  cInput.value = ctx.text || '';
   cInput.placeholder = 'e.g. ' + QUICK_HINTS[Math.floor(Math.random() * QUICK_HINTS.length)];
   updateComposer();
   cInput.focus({ preventScroll: true }); // focus synchronously so mobile keyboards open
+  if (ctx.text) cInput.setSelectionRange(cInput.value.length, cInput.value.length);
   if (composerOpen) return;
   composerOpen = true;
   pushOverlay('composer');
+  sfx.open();
   composer.classList.add('show');
   cBackdrop.classList.add('show');
   fab.animate([{ transform: 'rotate(0)' }, { transform: 'rotate(45deg) scale(.6)', opacity: 0 }], { duration: 260, easing: EASE, fill: 'forwards' });
@@ -1774,6 +1859,7 @@ function openComposer(ctx = {}) {
 function closeComposer(fromPop = false) {
   if (!composerOpen) return;
   if (!fromPop) dropOverlay('composer');
+  sfx.close();
   composerOpen = false;
   cInput.blur();
   composer.classList.remove('show');
@@ -1807,7 +1893,7 @@ function updateComposer() {
   if (p.priority) chips.push(`<span class="parsed" style="color:${PRIORITIES[p.priority].color}">${icon('flag')}${PRIORITIES[p.priority].label}</span>`);
   if (p.listId) {
     const l = getList(p.listId);
-    chips.push(`<span class="parsed" style="color:${l.color}">${esc(l.icon)} ${esc(l.name)}</span>`);
+    chips.push(`<span class="parsed">${orb(glyphFor(l), 14)}${esc(l.name)}</span>`);
   }
   p.tags.forEach((t) => chips.push(`<span class="parsed">#${esc(t)}</span>`));
   const box = $('#composerChips');
@@ -1824,6 +1910,7 @@ composer.addEventListener('submit', (e) => {
   e.preventDefault();
   const p = parseComposer();
   if (!p.title) return;
+  sfx.add();
   const r = S.addReminder({
     title: p.title,
     due: p.due ? p.due.toISOString() : null,
@@ -1988,11 +2075,19 @@ document.addEventListener('click', (e) => {
     return;
   }
 
+  const go = t.closest('[data-go]');
+  if (go) return setTab(go.dataset.go);
+
+  const starter = t.closest('[data-starter]');
+  if (starter) return openComposer({ text: starter.dataset.starter });
+
   const act = t.closest('[data-action]');
   if (!act) return;
   switch (act.dataset.action) {
     case 'back':
       return closePage();
+    case 'compose':
+      return openComposer();
     case 'enable-notifs':
       return enableNotifications();
     case 'dismiss-notice':
@@ -2044,8 +2139,21 @@ function confirmSheet(title, text, cta, onYes) {
   });
 }
 
+// A soft tick for every tap that doesn't already have its own sound
+document.addEventListener(
+  'click',
+  (e) => {
+    const b = e.target.closest('button, .switch');
+    if (!b || b.disabled) return;
+    if (b.closest('.check, .tab, #composerSend, [data-x="save"], [data-x="cancel"], [data-action="back"], .art-card, [data-glyph], .switch')) return;
+    sfx.tap();
+  },
+  true,
+);
+
 document.addEventListener('change', async (e) => {
   const t = e.target;
+  if (t.type === 'checkbox') sfx.toggle(t.checked);
   if (t.id === 'importFile' && t.files[0]) {
     try {
       S.importData(await t.files[0].text());
@@ -2205,6 +2313,19 @@ function boot() {
   });
   setTab('today', { instant: true });
   updateBadges();
+
+  // Opening sequence: the splash orb draws itself, then dissolves as the app
+  // un-blurs and the content rises in. Tap to skip.
+  const reveal = () => {
+    if (document.body.classList.contains('ready')) return;
+    document.body.classList.add('ready');
+    placeIndicator(ui.tab);
+    stagger(viewEl(ui.tab).firstElementChild);
+    sfx.intro();
+    setTimeout(() => $('#splash')?.remove(), 1200);
+  };
+  $('#splash').addEventListener('pointerdown', reveal);
+  setTimeout(reveal, reduced() ? 0 : 1300);
   ui.lastMinute = now().getMinutes();
   setInterval(tick, 10_000);
 

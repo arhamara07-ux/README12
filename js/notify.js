@@ -62,7 +62,7 @@ export function notifyReminder(r, kind) {
   const due = new Date(r.due);
   const when =
     kind === 'pre' ? `Coming up at ${fmtTime(due, state.settings.h24)}` : kind === 'snooze' ? 'Snoozed reminder' : `Due ${fmtTime(due, state.settings.h24)}`;
-  const body = [when, r.notes ? r.notes.slice(0, 120) : '', `${list.icon} ${list.name}`].filter(Boolean).join('\n');
+  const body = [when, r.notes ? r.notes.slice(0, 120) : '', list.name].filter(Boolean).join('\n');
   // While the app is open and focused, the in-app banner is enough.
   const inApp = document.visibilityState === 'visible' && document.hasFocus();
   if (!inApp)

@@ -17,10 +17,11 @@ export const PRIORITIES = [
 ];
 
 const defaultSettings = () => ({
-  theme: 'auto', // auto | light | dark
-  accent: '#5b5bf6',
+  theme: 'dark', // auto | light | dark
+  accent: 'mono', // 'mono' or a hex color
   notifications: false,
   sound: true,
+  uiSounds: true,
   haptics: true,
   h24: false,
   defaultTime: '09:00',
@@ -33,11 +34,11 @@ const defaultSettings = () => ({
 
 function seed() {
   const lists = [
-    { id: 'personal', name: 'Personal', color: '#5b5bf6', icon: '🏠' },
-    { id: 'work', name: 'Work', color: '#4dabf7', icon: '💼' },
-    { id: 'shopping', name: 'Shopping', color: '#51cf66', icon: '🛒' },
-    { id: 'health', name: 'Health', color: '#ff6b6b', icon: '❤️' },
-    { id: 'bills', name: 'Bills', color: '#ffa94d', icon: '💸' },
+    { id: 'personal', name: 'Personal', color: '#5b5bf6', icon: '🏠', glyph: 'loop' },
+    { id: 'work', name: 'Work', color: '#4dabf7', icon: '💼', glyph: 'grid' },
+    { id: 'shopping', name: 'Shopping', color: '#51cf66', icon: '🛒', glyph: 'bag' },
+    { id: 'health', name: 'Health', color: '#ff6b6b', icon: '❤️', glyph: 'wave' },
+    { id: 'bills', name: 'Bills', color: '#ffa94d', icon: '💸', glyph: 'rings' },
   ];
   const at = (days, h, m = 0) => {
     const d = new Date();
@@ -67,7 +68,7 @@ function seed() {
     r({ title: 'Pay phone bill', due: at(5, 10), listId: 'bills', priority: 3, repeat: { type: 'monthly', interval: 1 } }),
     r({ title: 'Plan the week', due: at(1, 9), listId: 'work', priority: 2, tags: ['planning'] }),
   ];
-  return { version: 1, lists, reminders, log: [], settings: defaultSettings(), meta: { created: Date.now(), lastDigest: null, onboarded: false } };
+  return { version: 1, lists, reminders, log: [], settings: defaultSettings(), meta: { created: Date.now(), lastDigest: null, onboarded: false, design: 2 } };
 }
 
 export function blankReminder() {
@@ -102,6 +103,12 @@ function load() {
     s.log = s.log || [];
     s.lists = s.lists || [];
     s.reminders = (s.reminders || []).map((r) => ({ ...blankReminder(), ...r }));
+    // One-time move to the monochrome "v2" look.
+    if ((s.meta.design || 1) < 2) {
+      s.settings.theme = 'dark';
+      s.settings.accent = 'mono';
+      s.meta.design = 2;
+    }
     return s;
   } catch (e) {
     console.warn('Failed to load state, starting fresh', e);

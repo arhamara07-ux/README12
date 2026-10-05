@@ -1,5 +1,5 @@
 // Remindly service worker: offline cache + notification actions.
-const CACHE = 'remindly-v1';
+const CACHE = 'remindly-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -9,6 +9,8 @@ const ASSETS = [
   './js/dates.js',
   './js/parse.js',
   './js/notify.js',
+  './js/art.js',
+  './js/sfx.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',
@@ -38,7 +40,24 @@ self.addEventListener('activate', (e) => {
 // Network-first for app files so updates land quickly, cache fallback offline.
 self.addEventListener('fetch', (e) => {
   const req = e.request;
-  if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  // Google Fonts: cache-first so the typeface works offline too.
+  if (url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com') {
+    e.respondWith(
+      caches.match(req).then(
+        (hit) =>
+          hit ||
+          fetch(req).then((res) => {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put(req, copy));
+            return res;
+          })
+      )
+    );
+    return;
+  }
+  if (url.origin !== location.origin) return;
   e.respondWith(
     fetch(req)
       .then((res) => {

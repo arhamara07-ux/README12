@@ -1,5 +1,7 @@
 # Remindly — personal reminders
 
+A calm, monochrome reminder app with a pure-black dark mode, animated generative art, and soft synthesized interface sounds.
+
 A fast, offline-first reminder app you can install on your phone or desktop. No accounts and no servers: your data stays on your device.
 
 ## Features
